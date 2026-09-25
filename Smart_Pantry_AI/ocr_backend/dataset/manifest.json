@@ -1,0 +1,108 @@
+[
+  {
+    "id": "parle_g_front_store",
+    "split": "front",
+    "image": "images/parle_g_package.jpg",
+    "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Parle-G.jpg?width=1400",
+    "source_record": "Wikimedia Commons, File:Parle-G.jpg",
+    "visible_targets": ["PARLE-G", "PARLE", "Rs 50"],
+    "fields": {
+      "brand": "PARLE",
+      "product_name": "PARLE-G",
+      "mrp": "Rs 50"
+    },
+    "conditions": ["reflective packaging", "occlusion", "busy background"]
+  },
+  {
+    "id": "amul_kool_front",
+    "split": "front",
+    "image": "images/amul_kool_front.jpg",
+    "source": "https://commons.wikimedia.org/wiki/Special:FilePath/Amul%20Kool%20Milk.jpg?width=1400",
+    "source_record": "Wikimedia Commons, File:Amul Kool Milk.jpg",
+    "visible_targets": ["Amul", "Kool", "ELAICHI", "FLAVOUR"],
+    "fields": {
+      "brand": "Amul",
+      "product_name": "Kool",
+      "category": "milk"
+    },
+    "conditions": ["curved packaging", "rotation", "glare", "hand occlusion"]
+  },
+  {
+    "id": "good_day_front",
+    "split": "front",
+    "image": "images/good_day_front.jpg",
+    "source": "https://images.openfoodfacts.org/images/products/890/106/309/3522/front_en.28.400.jpg",
+    "source_record": "Open Food Facts product 8901063093522",
+    "visible_targets": ["BRITANNIA", "GOOD DAY", "CASHEW COOKIES"],
+    "fields": {
+      "brand": "BRITANNIA",
+      "product_name": "GOOD DAY",
+      "quantity": null,
+      "mrp": null
+    },
+    "conditions": ["rotation", "small text", "reflective packaging"]
+  },
+  {
+    "id": "tata_salt_front",
+    "split": "front",
+    "image": "images/tata_salt_front.jpg",
+    "source": "https://images.openfoodfacts.org/images/products/890/404/390/1015/front_en.34.400.jpg",
+    "source_record": "Open Food Facts product 8904043901015",
+    "visible_targets": ["TATA", "SALT", "VACUUM EVAPORATED", "IODISED"],
+    "fields": {
+      "brand": "TATA",
+      "product_name": "SALT",
+      "category": "salt"
+    },
+    "conditions": ["small text", "reflective packaging"]
+  },
+  {
+    "id": "haldiram_bhujia_front",
+    "split": "front",
+    "image": "images/haldiram_bhujia_front.jpg",
+    "source": "https://images.openfoodfacts.org/images/products/890/400/440/0731/front_en.28.400.jpg",
+    "source_record": "Open Food Facts product 8904004400731",
+    "visible_targets": ["HALDIRAM'S", "ALOO BHUJIA SEV", "MADE MASALEDAR"],
+    "fields": {
+      "brand": "HALDIRAM'S",
+      "product_name": "ALOO BHUJIA SEV"
+    },
+    "conditions": ["curved packaging", "glare", "perspective"]
+  },
+  {
+    "id": "good_day_back",
+    "split": "back",
+    "image": "images/good_day_view2.jpg",
+    "source": "https://images.openfoodfacts.org/images/products/890/106/309/3522/2.400.jpg",
+    "source_record": "Open Food Facts product 8901063093522, image 2",
+    "visible_targets": ["GOOD DAY", "WHEAT FLOUR", "SUGAR", "CASHEW NUTS"],
+    "fields": {
+      "brand": "GOOD DAY",
+      "product_name": null,
+      "quantity": null,
+      "mrp": null,
+      "mfd": null,
+      "exp": null,
+      "batch": null
+    },
+    "conditions": ["back panel", "small text", "rotation", "low contrast"]
+  },
+  {
+    "id": "parle_g_back",
+    "split": "back",
+    "image": "images/parle_g_off_other.jpg",
+    "source": "https://images.openfoodfacts.org/images/products/890/171/913/4845/2.400.jpg",
+    "source_record": "Open Food Facts product 8901719134845, image 2",
+    "visible_targets": ["PARLE-G", "BISCUITS", "NET WEIGHT"],
+    "fields": {
+      "brand": "PARLE",
+      "product_name": "PARLE-G",
+      "quantity": null,
+      "mrp": null,
+      "mfd": null,
+      "exp": null,
+      "batch": null
+    },
+    "conditions": ["back panel", "tiny text", "barcode", "perspective"]
+  }
+]

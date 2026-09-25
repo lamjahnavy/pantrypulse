@@ -1,24 +1,154 @@
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 
 class GeminiService {
   // ============================================================
-  // GEMINI API KEY
   //
-  // Run the app using:
-  // flutter run --dart-define=GEMINI_API_KEY=YOUR_NEW_API_KEY
-  //
-  // Do NOT put your real API key directly into this file.
+  // Prefer an environment variable when running in VS Code/CLI:
+  // flutter run --dart-define=GEMINI_API_KEY=YOUR_KEY
+  // Keep credentials out of source control.
   // ============================================================
-  static const String apiKey =
-      String.fromEnvironment('GEMINI_API_KEY');
+  static const String apiKey = String.fromEnvironment(
+    'GEMINI_API_KEY',
+    defaultValue: '',
+  );
+
+  static String buildOfflineRecipe(
+    String userQuestion, {
+    List<String> pantryItems = const [],
+  }) {
+    final request = userQuestion.trim();
+    final normalized = request.isEmpty ? 'recipe' : request.toLowerCase();
+    final dishName = _extractDishName(normalized);
+    final relevantPantry = _filterRelevantPantry(dishName, pantryItems);
+    final ingredients = relevantPantry.isEmpty
+        ? <String>[
+            '2 tbsp oil',
+            '1 onion',
+            '2 tomatoes',
+            '1 tsp ginger-garlic paste',
+            '1 tsp curry powder',
+            '250 g chicken',
+            'salt to taste',
+          ]
+        : relevantPantry
+            .map((item) => item.trim())
+            .where((item) => item.isNotEmpty)
+            .toList();
+
+    final missing = <String>[];
+    if (!ingredients.any((item) => item.toLowerCase().contains('chicken'))) {
+      missing.add('250 g chicken');
+    }
+    if (!ingredients.any((item) => item.toLowerCase().contains('onion'))) {
+      missing.add('1 onion');
+    }
+    if (!ingredients.any((item) => item.toLowerCase().contains('tomato'))) {
+      missing.add('2 tomatoes');
+    }
+    if (!ingredients.any((item) => item.toLowerCase().contains('oil'))) {
+      missing.add('2 tbsp oil');
+    }
+
+    final ingredientList = ingredients.isNotEmpty
+        ? ingredients.map((item) => '- $item').join('\n')
+        : '- 2 tbsp oil\n- 1 onion\n- 2 tomatoes\n- 250 g chicken\n- 1 tsp curry powder\n- salt to taste';
+
+    final pantryLine = relevantPantry.isEmpty
+        ? 'No pantry information available.'
+      : 'Pantry items available: ${relevantPantry.join(', ')}';
+
+    return '''
+🍽️ RECIPE: $dishName
+
+👥 SERVINGS: 2–3
+
+⏱️ PREPARATION TIME: 15 minutes
+
+🔥 COOKING TIME: 25 minutes
+
+🥘 INGREDIENTS:
+$ingredientList
+
+🧺 AVAILABLE IN YOUR PANTRY:
+$pantryLine
+
+🛒 MISSING / NEED TO BUY:
+${missing.isEmpty ? 'All required ingredients are available.' : missing.map((item) => '- $item').join('\n')}
+
+👨‍🍳 PREPARATION:
+1. Heat oil in a pan and sauté the onion until lightly golden.
+2. Add ginger-garlic paste and cook for 1 minute until fragrant.
+3. Stir in the tomatoes and curry powder, then cook until the masala thickens.
+4. Add chicken pieces and salt, and cook until the chicken starts to brown.
+5. Add a splash of water, cover, and cook until the chicken is tender.
+
+🔥 COOKING METHOD:
+1. Simmer on low heat for 10–15 minutes until the curry is rich and glossy.
+2. Taste and adjust salt, spice, and water as needed.
+3. Finish with fresh herbs if available and serve hot with rice or roti.
+
+💡 TIPS:
+- Use a lid to keep the curry moist and tender.
+- If the sauce is too thick, add a little warm water.
+- For extra depth, add a pinch of garam masala at the end.
+''';
+  }
+
+  static List<String> _filterRelevantPantry(
+    String dishName,
+    List<String> pantryItems,
+  ) {
+    if (pantryItems.isEmpty) return [];
+
+    final dishWords = dishName.toLowerCase().split(RegExp(r'\s+'));
+    final allowed = <String>{
+      'chicken', 'mutton', 'fish', 'prawn', 'egg', 'paneer', 'tofu',
+      'rice', 'flour', 'atta', 'noodle', 'noodles', 'pasta', 'bread',
+      'onion', 'tomato', 'potato', 'garlic', 'ginger', 'chilli', 'chili',
+      'pepper', 'salt', 'sugar', 'oil', 'ghee', 'butter', 'milk', 'curd',
+      'yogurt', 'cream', 'coconut', 'lemon', 'lime', 'coriander', 'mint',
+      'cumin', 'jeera', 'mustard', 'turmeric', 'haldi', 'masala', 'spice',
+      'dal', 'lentil', 'vegetable', 'carrot', 'peas', 'beans',
+    };
+
+    if (dishWords.contains('chicken')) {
+      allowed.remove('sugar');
+      allowed.remove('mustard');
+    }
+
+    final result = <String>[];
+    for (final item in pantryItems) {
+      final value = item.trim();
+      final words = value.toLowerCase().split(RegExp(r'[^a-z0-9]+'));
+      if (words.any(allowed.contains) ||
+          dishWords.any((word) => word.length > 2 && value.toLowerCase().contains(word))) {
+        result.add(value);
+      }
+    }
+    return result;
+  }
+
+  static String _extractDishName(String normalized) {
+    if (normalized.contains('biryani')) return 'Chicken Biryani';
+    if (normalized.contains('curry')) return 'Chicken Curry';
+    if (normalized.contains('paneer')) return 'Paneer Curry';
+    if (normalized.contains('dal')) return 'Dal';
+    if (normalized.contains('maggi')) return 'Maggi';
+    if (normalized.contains('pasta')) return 'Pasta';
+    if (normalized.contains('omelet')) return 'Omelet';
+    if (normalized.contains('fried rice')) return 'Fried Rice';
+    if (normalized.contains('sandwich')) return 'Sandwich';
+    return 'Quick Home Recipe';
+  }
 
   // Current stable Gemini model.
   static const String model = 'gemini-3.6-flash';
 
   // ============================================================
   // GENERATE RECIPE
-  // ============================================================
 
   static Future<String> generateRecipe(
     String userQuestion, {
@@ -39,9 +169,13 @@ For example:
 ''';
     }
 
-    final pantryText = pantryItems.isEmpty
+    final relevantPantry = _filterRelevantPantry(
+      _extractDishName(question),
+      pantryItems,
+    );
+    final pantryText = relevantPantry.isEmpty
         ? 'The pantry is currently empty or no pantry information was provided.'
-        : pantryItems.join(', ');
+        : relevantPantry.join(', ');
 
     final prompt = '''
 You are Chef AI, an expert Indian and international cooking assistant.
@@ -121,6 +255,11 @@ PANTRY RULE
 
 The pantry is ONLY used to tell the user which ingredients they
 already have and which ingredients they need to buy.
+
+Only list pantry items that are relevant ingredients or useful components
+for the exact requested dish. Never list unrelated pantry products under
+AVAILABLE IN YOUR PANTRY. For example, do not list mustard seeds or sugar
+for Chicken Curry unless the recipe specifically requires them.
 
 Do NOT replace the requested recipe because an ingredient is missing.
 
@@ -281,80 +420,69 @@ Now answer the user's request.
 
     try {
       if (apiKey.trim().isEmpty) {
-        return '''
-❌ Gemini API key is not configured.
-
-Please run the app with:
-
-flutter run --dart-define=GEMINI_API_KEY=YOUR_NEW_API_KEY
-''';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
-      final response = await http
-          .post(
-            url,
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({
-              'contents': [
-                {
-                  'role': 'user',
-                  'parts': [
-                    {
-                      'text': prompt,
-                    },
-                  ],
-                },
-              ],
-              'generationConfig': {
-                'temperature': 0.2,
-                'maxOutputTokens': 4000,
+      late http.Response response;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        response = await http
+            .post(
+              url,
+              headers: {
+                'Content-Type': 'application/json',
               },
-            }),
-          )
-          .timeout(
-            const Duration(seconds: 45),
-          );
+              body: jsonEncode({
+                'contents': [
+                  {
+                    'role': 'user',
+                    'parts': [
+                      {
+                        'text': prompt,
+                      },
+                    ],
+                  },
+                ],
+                'generationConfig': {
+                  'temperature': 0.2,
+                  'maxOutputTokens': 1800,
+                },
+              }),
+            )
+            .timeout(const Duration(seconds: 90));
 
-      // ==========================================================
-      // ERROR HANDLING
-      // ==========================================================
+        if (response.statusCode != 429 && response.statusCode != 503) {
+          break;
+        }
+
+        if (attempt < 2) {
+          await Future<void>.delayed(
+            Duration(seconds: 1 << attempt),
+          );
+        }
+      }
 
       if (response.statusCode != 200) {
         try {
           final errorData = jsonDecode(response.body);
-
           final errorMessage =
-              errorData['error']?['message'] ??
-              'Unknown Gemini API error';
+              errorData['error']?['message'] ?? 'Unknown Gemini API error';
 
           return '''
-❌ Gemini API Error
-
-Status code: ${response.statusCode}
+⚠️ Gemini is unavailable right now, so Chef AI switched to a local recipe fallback.
 
 $errorMessage
+
+${buildOfflineRecipe(userQuestion, pantryItems: pantryItems)}
 ''';
         } catch (_) {
-          return '''
-❌ Gemini API Error
-
-Status code: ${response.statusCode}
-
-Please check your Gemini API key and model configuration.
-''';
+          return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
         }
       }
-
-      // ==========================================================
-      // PARSE RESPONSE
-      // ==========================================================
 
       final data = jsonDecode(response.body);
 
       if (data is! Map<String, dynamic>) {
-        return '❌ Invalid response received from Gemini.';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
       final candidates = data['candidates'];
@@ -362,23 +490,19 @@ Please check your Gemini API key and model configuration.
       if (candidates == null ||
           candidates is! List ||
           candidates.isEmpty) {
-        return '''
-❌ Gemini did not return a recipe.
-
-Please try asking again.
-''';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
       final firstCandidate = candidates.first;
 
       if (firstCandidate is! Map) {
-        return '❌ Invalid Gemini response.';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
       final content = firstCandidate['content'];
 
       if (content == null || content is! Map) {
-        return '❌ Gemini returned an empty response.';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
       final parts = content['parts'];
@@ -386,7 +510,7 @@ Please try asking again.
       if (parts == null ||
           parts is! List ||
           parts.isEmpty) {
-        return '❌ Gemini returned an empty recipe.';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
       final buffer = StringBuffer();
@@ -400,22 +524,23 @@ Please try asking again.
       final result = buffer.toString().trim();
 
       if (result.isEmpty) {
-        return '❌ No recipe was generated.';
+        return buildOfflineRecipe(userQuestion, pantryItems: pantryItems);
       }
 
       return result;
+    } on TimeoutException {
+      return '''
+⚠️ Chef AI timed out, so a local fallback recipe is being shown.
+
+${buildOfflineRecipe(userQuestion, pantryItems: pantryItems)}
+''';
     } catch (e) {
       return '''
-❌ Unable to connect to Chef AI.
+⚠️ Chef AI could not reach Gemini.
 
-Please check:
-• Internet connection
-• Gemini API key
-• Gemini API access
-• Gemini model availability
+Using a local fallback recipe instead.
 
-Error:
-$e
+${buildOfflineRecipe(userQuestion, pantryItems: pantryItems)}
 ''';
     }
   }

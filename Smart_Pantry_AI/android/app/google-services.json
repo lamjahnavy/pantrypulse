@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "275308126109",
+    "project_id": "random-team-genrating",
+    "storage_bucket": "random-team-genrating.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:275308126109:android:44d52c24c4e64e5e0b9974",
+        "android_client_info": {
+          "package_name": "com.example.smart_pantry_ai"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDcGJhSwfJ0kBcoVEK59MaJzaPf5rDUckA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

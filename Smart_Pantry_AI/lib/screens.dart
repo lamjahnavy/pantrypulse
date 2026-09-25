@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -5,9 +7,15 @@ import 'package:intl/intl.dart';
 
 import 'product_model.dart';
 import 'shopping_model.dart';
+import 'planner_screen.dart';
 import 'storage_service.dart';
 import 'ocr_service.dart';
 import 'recipe_service.dart';
+import 'notification_service.dart';
+import 'ocr_preprocessing.dart';
+import 'ocr_backend_client.dart';
+import 'ocr_roi.dart';
+import 'profile_screen.dart';
 
 /// ===============================================================
 /// PANTRY CATEGORIES
@@ -55,14 +63,14 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
 
   String searchQuery = '';
 
-  final TextEditingController searchController =
-      TextEditingController();
+  final TextEditingController searchController = TextEditingController();
 
   bool isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    NotificationService.onWeeklyReminderClosed = _loadPantry;
     _loadPantry();
   }
 
@@ -100,6 +108,69 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
 
   Future<void> _savePantry() async {
     await StorageService.saveProducts(pantryItems);
+  }
+
+  Future<void> _openMoreMenu() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.only(bottom: 12),
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(24, 4, 24, 12),
+                child: Text(
+                  'More',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.calendar_month_outlined),
+                title: const Text('Planner'),
+                subtitle: const Text('Plan meals for the week'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() => selectedIndex = 4);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.shopping_cart_outlined),
+                title: const Text('Shopping List'),
+                subtitle: const Text('View items that need buying'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() => selectedIndex = 7);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.insights_outlined),
+                title: const Text('Analytics'),
+                subtitle: const Text('View pantry insights'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() => selectedIndex = 5);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.notifications_none),
+                title: const Text('Weekly Pantry Check'),
+                subtitle: const Text('Choose your reminder schedule'),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() => selectedIndex = 6);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   void addProduct(Product product) {
@@ -161,9 +232,15 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
     );
   }
 
-  String getStatus(String expDate) {
-    if (expDate.isEmpty ||
-        expDate.toLowerCase() == 'not detected') {
+  String getStatus(String expDate, {String quantity = ''}) {
+    final quantityValue = double.tryParse(
+      quantity.replaceAll(RegExp(r'[^0-9.\-]'), ''),
+    );
+    if (quantityValue != null && quantityValue <= 0) {
+      return 'Out of Stock';
+    }
+
+    if (expDate.isEmpty || expDate.toLowerCase() == 'not detected') {
       return 'Fresh';
     }
 
@@ -222,6 +299,8 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
         return Colors.red;
       case 'Expiring Soon':
         return Colors.orange;
+      case 'Out of Stock':
+        return Colors.blueGrey;
       default:
         return Colors.green;
     }
@@ -246,45 +325,55 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
           ),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'Profile',
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ProfileScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
-
       body: IndexedStack(
         index: selectedIndex,
         children: [
           buildHome(),
-
           OCRScannerPage(
             cameras: widget.cameras,
             onProductAdded: addProduct,
             isActive: selectedIndex == 1,
           ),
-
           buildPantry(),
-
           RecipesScreen(
             pantryItems: pantryItems,
           ),
-
-          const PlannerScreen(),
-
+          PlannerScreen(pantryItems: pantryItems),
           AnalyticsScreen(
             pantryItems: pantryItems,
           ),
+          const WeeklyPantrySettingsScreen(),
+          PlannerScreen(
+            pantryItems: pantryItems,
+            shoppingOnly: true,
+          ),
         ],
       ),
-
       bottomNavigationBar: NavigationBar(
-        selectedIndex: selectedIndex,
-
+        selectedIndex: selectedIndex < 4 ? selectedIndex : 0,
         onDestinationSelected: (index) {
-          setState(() {
-            selectedIndex = index;
-          });
+          if (index == 4) {
+            _openMoreMenu();
+            return;
+          }
+          setState(() => selectedIndex = index);
         },
-
-        labelBehavior:
-            NavigationDestinationLabelBehavior.alwaysShow,
-
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -307,14 +396,9 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
             label: 'Recipes',
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month),
-            label: 'Planner',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.insights_outlined),
-            selectedIcon: Icon(Icons.insights),
-            label: 'Analytics',
+            icon: Icon(Icons.more_horiz),
+            selectedIcon: Icon(Icons.more_horiz),
+            label: 'More',
           ),
         ],
       ),
@@ -328,29 +412,29 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
   Widget buildHome() {
     final expired = pantryItems
         .where(
-          (item) => getStatus(item.exp) == 'Expired',
+          (item) => getStatus(item.exp, quantity: item.quantity) == 'Expired',
         )
         .length;
 
     final expiring = pantryItems
         .where(
-          (item) => getStatus(item.exp) == 'Expiring Soon',
+          (item) =>
+              getStatus(item.exp, quantity: item.quantity) == 'Expiring Soon',
         )
         .length;
 
     final lowStock = pantryItems
         .where(
           (item) =>
+              getStatus(item.exp, quantity: item.quantity) == 'Out of Stock' ||
               item.quantity.toLowerCase().contains('low'),
         )
         .length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
-
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-
         children: [
           const Text(
             'Welcome to Pantry Pulse 👋',
@@ -376,20 +460,16 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
           Material(
             color: Colors.green,
             borderRadius: BorderRadius.circular(20),
-
             child: InkWell(
               borderRadius: BorderRadius.circular(20),
-
               onTap: () {
                 setState(() {
                   selectedIndex = 1;
                 });
               },
-
               child: Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(24),
-
                 child: const Column(
                   children: [
                     Icon(
@@ -397,9 +477,7 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                       color: Colors.white,
                       size: 60,
                     ),
-
                     SizedBox(height: 12),
-
                     Text(
                       'SCAN PRODUCT',
                       style: TextStyle(
@@ -408,9 +486,7 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-
                     SizedBox(height: 5),
-
                     Text(
                       'Use OCR to read product labels',
                       style: TextStyle(
@@ -434,7 +510,6 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                   onPressed: showAddManualDialog,
                   icon: const Icon(Icons.add),
                   label: const Text('ADD ITEM'),
-
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       vertical: 15,
@@ -445,9 +520,7 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                   ),
                 ),
               ),
-
               const SizedBox(width: 10),
-
               Expanded(
                 child: ElevatedButton.icon(
                   onPressed: () {
@@ -455,11 +528,8 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                       selectedIndex = 3;
                     });
                   },
-
                   icon: const Icon(Icons.auto_awesome),
-
                   label: const Text('AI RECIPES'),
-
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
                       vertical: 15,
@@ -467,7 +537,6 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                     backgroundColor: Colors.orange.shade50,
                     foregroundColor: Colors.orange.shade900,
                     elevation: 0,
-
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(15),
                       side: BorderSide(
@@ -495,14 +564,10 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
           GridView.count(
             crossAxisCount: 2,
             shrinkWrap: true,
-            physics:
-                const NeverScrollableScrollPhysics(),
-
+            physics: const NeverScrollableScrollPhysics(),
             mainAxisSpacing: 12,
             crossAxisSpacing: 12,
-
             childAspectRatio: 1.3,
-
             children: [
               summaryCard(
                 'Total Items',
@@ -510,21 +575,18 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                 Icons.inventory_2,
                 Colors.blue,
               ),
-
               summaryCard(
                 'Expired',
                 expired.toString(),
                 Icons.error_outline,
                 Colors.red,
               ),
-
               summaryCard(
                 'Expiring Soon',
                 expiring.toString(),
                 Icons.warning_amber,
                 Colors.orange,
               ),
-
               summaryCard(
                 'Low Stock',
                 lowStock.toString(),
@@ -538,9 +600,7 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
 
           if (pantryItems.isNotEmpty) ...[
             Row(
-              mainAxisAlignment:
-                  MainAxisAlignment.spaceBetween,
-
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 const Text(
                   'Recent Items',
@@ -549,7 +609,6 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-
                 TextButton(
                   onPressed: () {
                     setState(() {
@@ -560,17 +619,13 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                 ),
               ],
             ),
-
             const SizedBox(height: 10),
-
             ...pantryItems.reversed.take(3).map(
               (item) {
-                final status = getStatus(item.exp);
+                final status = getStatus(item.exp, quantity: item.quantity);
 
                 return Card(
-                  margin:
-                      const EdgeInsets.only(bottom: 8),
-
+                  margin: const EdgeInsets.only(bottom: 8),
                   child: ListTile(
                     title: Text(
                       item.name,
@@ -578,11 +633,9 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-
                     subtitle: Text(
                       '${item.brand} • ${item.quantity}',
                     ),
-
                     trailing: Text(
                       status,
                       style: TextStyle(
@@ -608,12 +661,9 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
   ) {
     return Container(
       padding: const EdgeInsets.all(16),
-
       decoration: BoxDecoration(
         color: Colors.white,
-
         borderRadius: BorderRadius.circular(18),
-
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.05),
@@ -621,20 +671,15 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
           ),
         ],
       ),
-
       child: Column(
-        mainAxisAlignment:
-            MainAxisAlignment.center,
-
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             icon,
             size: 30,
             color: color,
           ),
-
           const SizedBox(height: 5),
-
           Text(
             value,
             style: const TextStyle(
@@ -642,7 +687,6 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
               fontWeight: FontWeight.bold,
             ),
           ),
-
           Text(
             title,
             style: const TextStyle(
@@ -660,8 +704,7 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
   /// =============================================================
 
   Widget buildPantry() {
-    final filteredItems =
-        pantryItems.where((item) {
+    final filteredItems = pantryItems.where((item) {
       final q = searchQuery.toLowerCase();
 
       return item.name.toLowerCase().contains(q) ||
@@ -673,77 +716,55 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
       children: [
         Padding(
           padding: const EdgeInsets.all(16),
-
           child: TextField(
             controller: searchController,
-
             onChanged: (value) {
               setState(() {
                 searchQuery = value;
               });
             },
-
             decoration: InputDecoration(
               hintText: 'Search pantry...',
-
-              prefixIcon:
-                  const Icon(Icons.search),
-
+              prefixIcon: const Icon(Icons.search),
               filled: true,
-
               fillColor: Colors.white,
-
               border: OutlineInputBorder(
-                borderRadius:
-                    BorderRadius.circular(15),
+                borderRadius: BorderRadius.circular(15),
                 borderSide: BorderSide.none,
               ),
             ),
           ),
         ),
-
         Expanded(
           child: filteredItems.isEmpty
               ? buildEmptyState()
-
               : ListView.builder(
-                  padding:
-                      const EdgeInsets.symmetric(
+                  padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                   ),
-
-                  itemCount:
-                      filteredItems.length,
-
+                  itemCount: filteredItems.length,
                   itemBuilder: (context, index) {
-                    final item =
-                        filteredItems[index];
+                    final item = filteredItems[index];
 
-                    final status =
-                        getStatus(item.exp);
+                    final status = getStatus(
+                      item.exp,
+                      quantity: item.quantity,
+                    );
 
                     return Card(
-                      margin:
-                          const EdgeInsets.only(
+                      margin: const EdgeInsets.only(
                         bottom: 12,
                       ),
-
-                      shape:
-                          RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(15),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(15),
                       ),
-
                       child: ListTile(
                         title: Text(
                           item.name,
-                          style:
-                              const TextStyle(
-                            fontWeight:
-                                FontWeight.bold,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-
                         subtitle: Text(
                           'Category: ${item.category}\n'
                           'Qty: ${item.quantity}\n'
@@ -751,58 +772,47 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                           'EXP: ${item.exp}\n'
                           'Price: ₹${item.price.toStringAsFixed(2)}',
                         ),
-
                         isThreeLine: true,
-
-                        trailing: Column(
-                          mainAxisAlignment:
-                              MainAxisAlignment.center,
-
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Container(
-                              padding:
-                                  const EdgeInsets.symmetric(
+                              padding: const EdgeInsets.symmetric(
                                 horizontal: 8,
                                 vertical: 4,
                               ),
-
-                              decoration:
-                                  BoxDecoration(
-                                color:
-                                    _getStatusColor(
+                              decoration: BoxDecoration(
+                                color: _getStatusColor(
                                   status,
                                 ).withValues(
                                   alpha: 0.1,
                                 ),
-
-                                borderRadius:
-                                    BorderRadius.circular(
+                                borderRadius: BorderRadius.circular(
                                   8,
                                 ),
                               ),
-
                               child: Text(
                                 status,
                                 style: TextStyle(
-                                  color:
-                                      _getStatusColor(
+                                  color: _getStatusColor(
                                     status,
                                   ),
                                   fontSize: 10,
-                                  fontWeight:
-                                      FontWeight.bold,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
                             ),
-
                             IconButton(
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
                               icon: const Icon(
                                 Icons.delete_outline,
                                 color: Colors.red,
                               ),
-
-                              onPressed: () =>
-                                  deleteProduct(item),
+                              onPressed: () => deleteProduct(item),
                             ),
                           ],
                         ),
@@ -818,18 +828,14 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
   Widget buildEmptyState() {
     return Center(
       child: Column(
-        mainAxisAlignment:
-            MainAxisAlignment.center,
-
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.kitchen,
             size: 80,
             color: Colors.grey.shade300,
           ),
-
           const SizedBox(height: 20),
-
           const Text(
             'Pantry is empty',
             style: TextStyle(
@@ -837,20 +843,15 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
               fontWeight: FontWeight.bold,
             ),
           ),
-
           const Text(
             'Scan items to get started.',
             style: TextStyle(
               color: Colors.grey,
             ),
           ),
-
           const SizedBox(height: 30),
-
           Row(
-            mainAxisAlignment:
-                MainAxisAlignment.center,
-
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               ElevatedButton.icon(
                 onPressed: () {
@@ -858,24 +859,14 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                     selectedIndex = 1;
                   });
                 },
-
-                icon:
-                    const Icon(Icons.camera_alt),
-
+                icon: const Icon(Icons.camera_alt),
                 label: const Text('Scan'),
               ),
-
               const SizedBox(width: 15),
-
               OutlinedButton.icon(
-                onPressed:
-                    showAddManualDialog,
-
-                icon:
-                    const Icon(Icons.edit),
-
-                label:
-                    const Text('Manual'),
+                onPressed: showAddManualDialog,
+                icon: const Icon(Icons.edit),
+                label: const Text('Manual'),
               ),
             ],
           ),
@@ -889,129 +880,87 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
   /// =============================================================
 
   void showAddManualDialog() {
-    final nameController =
-        TextEditingController();
+    final nameController = TextEditingController();
 
-    final brandController =
-        TextEditingController();
+    final brandController = TextEditingController();
 
-    final qtyController =
-        TextEditingController();
+    final qtyController = TextEditingController();
 
-    final expController =
-        TextEditingController();
+    final expController = TextEditingController();
 
-    final mfdController =
-        TextEditingController();
+    final mfdController = TextEditingController();
 
-    final priceController =
-        TextEditingController();
+    final priceController = TextEditingController();
 
     String category = 'Others';
 
     showModalBottomSheet(
       context: context,
-
       isScrollControlled: true,
-
       builder: (sheetContext) {
         return StatefulBuilder(
-          builder:
-              (context, setModalState) {
+          builder: (context, setModalState) {
             return Padding(
               padding: EdgeInsets.only(
-                bottom:
-                    MediaQuery.of(context)
-                        .viewInsets
-                        .bottom,
-
+                bottom: MediaQuery.of(context).viewInsets.bottom,
                 left: 20,
                 right: 20,
                 top: 20,
               ),
-
               child: SingleChildScrollView(
                 child: Column(
-                  mainAxisSize:
-                      MainAxisSize.min,
-
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
                       'Add Product Manually',
                       style: TextStyle(
                         fontSize: 20,
-                        fontWeight:
-                            FontWeight.bold,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
 
                     const SizedBox(height: 10),
 
                     TextField(
-                      controller:
-                          nameController,
-
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'Product Name',
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Product Name',
                       ),
                     ),
 
                     TextField(
-                      controller:
-                          brandController,
-
-                      decoration:
-                          const InputDecoration(
+                      controller: brandController,
+                      decoration: const InputDecoration(
                         labelText: 'Brand',
                       ),
                     ),
 
                     TextField(
-                      controller:
-                          qtyController,
-
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'Quantity',
+                      controller: qtyController,
+                      decoration: const InputDecoration(
+                        labelText: 'Quantity',
                       ),
                     ),
 
                     TextField(
-                      controller:
-                          priceController,
-
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'Price (₹)',
+                      controller: priceController,
+                      decoration: const InputDecoration(
+                        labelText: 'Price (₹)',
                       ),
-
-                      keyboardType:
-                          TextInputType.number,
+                      keyboardType: TextInputType.number,
                     ),
 
                     TextField(
-                      controller:
-                          mfdController,
-
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'MFD (DD/MM/YYYY)',
+                      controller: mfdController,
+                      decoration: const InputDecoration(
+                        labelText: 'MFD (DD/MM/YYYY)',
                       ),
                     ),
 
                     TextField(
-                      controller:
-                          expController,
-
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'EXP (DD/MM/YYYY)',
+                      controller: expController,
+                      decoration: const InputDecoration(
+                        labelText: 'EXP (DD/MM/YYYY)',
                       ),
                     ),
 
@@ -1019,22 +968,15 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
 
                     /// FIXED DROPDOWN
                     DropdownButtonFormField<String>(
-                      initialValue:
-                          safeCategory(category),
-
-                      items:
-                          pantryCategories
-                              .map(
-                                (c) =>
-                                    DropdownMenuItem<
-                                        String>(
-                                  value: c,
-                                  child:
-                                      Text(c),
-                                ),
-                              )
-                              .toList(),
-
+                      initialValue: safeCategory(category),
+                      items: pantryCategories
+                          .map(
+                            (c) => DropdownMenuItem<String>(
+                              value: c,
+                              child: Text(c),
+                            ),
+                          )
+                          .toList(),
                       onChanged: (value) {
                         if (value != null) {
                           setModalState(() {
@@ -1042,11 +984,8 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                           });
                         }
                       },
-
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'Category',
+                      decoration: const InputDecoration(
+                        labelText: 'Category',
                       ),
                     ),
 
@@ -1054,16 +993,10 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
 
                     SizedBox(
                       width: double.infinity,
-
                       child: ElevatedButton(
                         onPressed: () {
-                          if (nameController
-                              .text
-                              .trim()
-                              .isEmpty) {
-                            ScaffoldMessenger
-                                .of(context)
-                                .showSnackBar(
+                          if (nameController.text.trim().isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text(
                                   'Please enter product name',
@@ -1076,69 +1009,28 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
 
                           addProduct(
                             Product(
-                              id: DateTime
-                                  .now()
+                              id: DateTime.now()
                                   .millisecondsSinceEpoch
                                   .toString(),
-
-                              name:
-                                  nameController
-                                      .text
-                                      .trim(),
-
-                              brand:
-                                  brandController
-                                      .text
-                                      .trim()
-                                      .isEmpty
+                              name: nameController.text.trim(),
+                              brand: brandController.text.trim().isEmpty
                                   ? 'Unknown'
-                                  : brandController
-                                      .text
-                                      .trim(),
-
-                              quantity:
-                                  qtyController
-                                      .text
-                                      .trim()
-                                      .isEmpty
+                                  : brandController.text.trim(),
+                              quantity: qtyController.text.trim().isEmpty
                                   ? 'Not detected'
-                                  : qtyController
-                                      .text
-                                      .trim(),
-
-                              mfd:
-                                  mfdController
-                                      .text
-                                      .trim()
-                                      .isEmpty
+                                  : qtyController.text.trim(),
+                              mfd: mfdController.text.trim().isEmpty
                                   ? 'Not detected'
-                                  : mfdController
-                                      .text
-                                      .trim(),
-
-                              exp:
-                                  expController
-                                      .text
-                                      .trim()
-                                      .isEmpty
+                                  : mfdController.text.trim(),
+                              exp: expController.text.trim().isEmpty
                                   ? 'Not detected'
-                                  : expController
-                                      .text
-                                      .trim(),
-
-                              category:
-                                  safeCategory(
+                                  : expController.text.trim(),
+                              category: safeCategory(
                                 category,
                               ),
-
-                              addedDate:
-                                  DateTime.now(),
-
-                              price:
-                                  double.tryParse(
-                                    priceController
-                                        .text
-                                        .trim(),
+                              addedDate: DateTime.now(),
+                              price: double.tryParse(
+                                    priceController.text.trim(),
                                   ) ??
                                   0.0,
                             ),
@@ -1148,9 +1040,7 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
                             sheetContext,
                           );
                         },
-
-                        child:
-                            const Text(
+                        child: const Text(
                           'ADD TO PANTRY',
                         ),
                       ),
@@ -1164,6 +1054,384 @@ class _PantryPulseHomePageState extends State<PantryPulseHomePage> {
           },
         );
       },
+    );
+  }
+}
+
+class WeeklyPantryCheckScreen extends StatefulWidget {
+  const WeeklyPantryCheckScreen({super.key});
+
+  @override
+  State<WeeklyPantryCheckScreen> createState() =>
+      _WeeklyPantryCheckScreenState();
+}
+
+class _WeeklyPantryCheckScreenState extends State<WeeklyPantryCheckScreen> {
+  List<Product> products = [];
+  final answers = <String, String>{};
+  bool loading = true;
+  bool saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProducts();
+  }
+
+  Future<void> _loadProducts() async {
+    final loaded = await StorageService.loadProducts();
+    if (!mounted) return;
+    loaded.sort((a, b) => _expiryRank(a).compareTo(_expiryRank(b)));
+    setState(() {
+      products = loaded;
+      loading = false;
+    });
+  }
+
+  int _expiryRank(Product product) {
+    final match = RegExp(r'^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$')
+        .firstMatch(product.exp.trim());
+    if (match == null) return 999999;
+    var year = int.parse(match.group(3)!);
+    if (year < 100) year += 2000;
+    final expiry =
+        DateTime(year, int.parse(match.group(2)!), int.parse(match.group(1)!));
+    return expiry.difference(DateTime.now()).inDays;
+  }
+
+  Future<void> _setAnswer(Product product, String answer) async {
+    if (answer == 'Some Used') {
+      final remaining = await _askRemainingQuantity(product);
+      if (remaining == null || remaining.isEmpty) return;
+      answer = 'Some Used: $remaining';
+    }
+
+    if (!mounted) return;
+    setState(() => answers[product.id] = answer);
+  }
+
+  Future<String?> _askRemainingQuantity(Product product) async {
+    return showDialog<String>(
+      context: context,
+      builder: (_) => RemainingQuantityDialog(
+        productName: product.name,
+        initialQuantity: product.quantity,
+      ),
+    );
+  }
+
+  Future<void> _saveChanges() async {
+    setState(() => saving = true);
+    try {
+      final updatedProducts = products.toList();
+      final consumptionEvents = <({Product product, String usedQuantity})>[];
+      final shoppingItems = <String>[];
+
+      for (final product in products) {
+        final answer = answers[product.id];
+        if (answer == null || answer == 'Not Used') continue;
+
+        if (answer == 'Used') {
+          final index =
+              updatedProducts.indexWhere((item) => item.id == product.id);
+          if (index != -1) {
+            updatedProducts[index] = product.copyWith(
+              quantity: '0',
+              status: 'Finished',
+            );
+          }
+          shoppingItems.add('${product.name} - ${product.originalQuantity}');
+          consumptionEvents
+              .add((product: product, usedQuantity: product.quantity));
+        } else if (answer.startsWith('Some Used:')) {
+          final remaining = answer.substring('Some Used:'.length).trim();
+          final index =
+              updatedProducts.indexWhere((item) => item.id == product.id);
+          if (index != -1) {
+            updatedProducts[index] = product.copyWith(quantity: remaining);
+          }
+          consumptionEvents.add((
+            product: product,
+            usedQuantity: '${product.quantity} -> $remaining',
+          ));
+        }
+      }
+
+      if (consumptionEvents.isNotEmpty) {
+        await StorageService.saveProducts(updatedProducts);
+        if (shoppingItems.isNotEmpty) {
+          await StorageService.addShoppingItems(shoppingItems);
+        }
+        for (final event in consumptionEvents) {
+          await StorageService.recordConsumptionEvent(
+            product: event.product,
+            usedQuantity: event.usedQuantity,
+          );
+        }
+      }
+
+      if (!mounted) return;
+      setState(() => saving = false);
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save pantry review: $error')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) return const Center(child: CircularProgressIndicator());
+    if (products.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Weekly Pantry Check')),
+        body: const Center(child: Text('No pantry products to review.')),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Weekly Pantry Check')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Text('Let\'s update your pantry',
+              style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          const Text('Review what you used this week.'),
+          const SizedBox(height: 16),
+          ...products.map((product) => Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(product.name,
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 4),
+                      Text('${product.quantity}  •  Expires: ${product.exp}'),
+                      const SizedBox(height: 12),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton(
+                            onPressed: () => _setAnswer(product, 'Used'),
+                            child: Text(answers[product.id] == 'Used'
+                                ? 'Used ✓'
+                                : 'Used'),
+                          ),
+                          OutlinedButton(
+                            onPressed: () => _setAnswer(product, 'Some Used'),
+                            child: Text(
+                                answers[product.id]?.startsWith('Some Used:') ==
+                                        true
+                                    ? 'Some Used ✓'
+                                    : 'Some Used'),
+                          ),
+                          OutlinedButton(
+                            onPressed: () => _setAnswer(product, 'Not Used'),
+                            child: Text(answers[product.id] == 'Not Used'
+                                ? 'Not Used ✓'
+                                : 'Not Used'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              )),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: saving ? null : _saveChanges,
+            icon: const Icon(Icons.save),
+            label: Text(saving ? 'Saving...' : 'Save Changes'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class RemainingQuantityDialog extends StatefulWidget {
+  final String productName;
+  final String initialQuantity;
+
+  const RemainingQuantityDialog({
+    super.key,
+    required this.productName,
+    required this.initialQuantity,
+  });
+
+  @override
+  State<RemainingQuantityDialog> createState() =>
+      _RemainingQuantityDialogState();
+}
+
+class _RemainingQuantityDialogState extends State<RemainingQuantityDialog> {
+  late final TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initialQuantity);
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('${widget.productName} remaining quantity'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: 'Remaining quantity',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('CANCEL'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+          child: const Text('SAVE'),
+        ),
+      ],
+    );
+  }
+}
+
+class WeeklyPantrySettingsScreen extends StatefulWidget {
+  const WeeklyPantrySettingsScreen({super.key});
+
+  @override
+  State<WeeklyPantrySettingsScreen> createState() =>
+      _WeeklyPantrySettingsScreenState();
+}
+
+class _WeeklyPantrySettingsScreenState
+    extends State<WeeklyPantrySettingsScreen> {
+  static const dayNames = <String>[
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+
+  int weekday = DateTime.monday;
+  TimeOfDay time = const TimeOfDay(hour: 9, minute: 0);
+  bool enabled = true;
+  bool loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSchedule();
+  }
+
+  Future<void> _loadSchedule() async {
+    final schedule = await NotificationService.getWeeklySchedule();
+    if (!mounted) return;
+    setState(() {
+      weekday = schedule.weekday;
+      time = TimeOfDay(hour: schedule.hour, minute: schedule.minute);
+      enabled = schedule.enabled;
+      loading = false;
+    });
+  }
+
+  Future<void> _chooseTime() async {
+    final selected = await showTimePicker(context: context, initialTime: time);
+    if (selected != null && mounted) {
+      setState(() => time = selected);
+    }
+  }
+
+  Future<void> _save() async {
+    await NotificationService.saveWeeklySchedule(
+      weekday: weekday,
+      hour: time.hour,
+      minute: time.minute,
+      enabled: enabled,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Weekly pantry check schedule saved.')),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final formattedTime = time.format(context);
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        Text(
+          'Weekly Pantry Check',
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Choose when you would like a reminder to review your pantry every week.',
+        ),
+        const SizedBox(height: 20),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Weekly Pantry Check'),
+          subtitle: Text(enabled ? 'ON' : 'OFF'),
+          value: enabled,
+          onChanged: (value) => setState(() => enabled = value),
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<int>(
+          initialValue: weekday,
+          decoration: const InputDecoration(
+            labelText: 'Day',
+            border: OutlineInputBorder(),
+          ),
+          items: List.generate(
+            dayNames.length,
+            (index) => DropdownMenuItem(
+              value: index + 1,
+              child: Text(dayNames[index]),
+            ),
+          ),
+          onChanged: (value) {
+            if (value != null) setState(() => weekday = value);
+          },
+        ),
+        const SizedBox(height: 16),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Time'),
+          subtitle: Text(formattedTime),
+          trailing: const Icon(Icons.schedule),
+          onTap: _chooseTime,
+        ),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          onPressed: _save,
+          icon: const Icon(Icons.notifications_active),
+          label: const Text('Set Weekly Reminder'),
+        ),
+      ],
     );
   }
 }
@@ -1216,6 +1484,18 @@ class _OCRScannerPageState extends State<OCRScannerPage>
     super.didUpdateWidget(oldWidget);
 
     if (widget.isActive && !oldWidget.isActive) {
+      if (frontScanned) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !widget.isActive) return;
+
+          setState(() {
+            frontScanned = false;
+            frontDetails = null;
+            scanTitle = '1 of 2 — FRONT SIDE';
+            scanMessage = 'Scan the FRONT of the product';
+          });
+        });
+      }
       controller?.resumePreview();
     }
 
@@ -1228,8 +1508,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final currentController = controller;
 
-    if (currentController == null ||
-        !currentController.value.isInitialized) {
+    if (currentController == null || !currentController.value.isInitialized) {
       if (state == AppLifecycleState.resumed) {
         initializeCamera();
       }
@@ -1296,6 +1575,32 @@ class _OCRScannerPageState extends State<OCRScannerPage>
     });
   }
 
+  Future<String> _recognizeOnDevice(String path) async {
+    final recognizedText = await textRecognizer.processImage(
+      InputImage.fromFilePath(path),
+    );
+    return recognizedText.text.trim();
+  }
+
+  bool _needsBackendFallback(String text) {
+    if (text.trim().length < 12) return true;
+
+    if (!frontScanned) {
+      final details = OCRService.extractFrontDetails(text);
+      return details['name'] == 'Unknown Product' &&
+          details['brand'] == 'Unknown Brand';
+    }
+
+    final details = OCRService.extractBackDetails(text);
+    final missingFields = [
+      details['quantity'],
+      details['price'],
+      details['mfd'],
+      details['exp'],
+    ].where((value) => value == 'Not detected' || value == '0.00').length;
+    return missingFields >= 4;
+  }
+
   Future<void> scanProduct() async {
     final cameraController = controller;
 
@@ -1309,15 +1614,70 @@ class _OCRScannerPageState extends State<OCRScannerPage>
       isProcessing = true;
     });
 
+    final scanStopwatch = Stopwatch()..start();
+    final stageStopwatch = Stopwatch()..start();
+    void logStage(String stage) {
+      debugPrint(
+        'OCR timing: stage=$stage stageMs=${stageStopwatch.elapsedMilliseconds} '
+        'totalMs=${scanStopwatch.elapsedMilliseconds}',
+      );
+      stageStopwatch
+        ..reset()
+        ..start();
+    }
+
     try {
       final XFile image = await cameraController.takePicture();
+      logStage('capture');
 
-      final inputImage = InputImage.fromFilePath(image.path);
+      final previewSize = MediaQuery.sizeOf(context);
+      final roiPath = await OCRRegionOfInterest.cropGuideRegion(
+        sourcePath: image.path,
+        previewWidth: previewSize.width,
+        previewHeight: previewSize.height,
+      );
+      logStage('roi');
+      final ocrPath = roiPath ?? image.path;
+      String ocrText = '';
 
-      final recognizedText =
-          await textRecognizer.processImage(inputImage);
+      try {
+        ocrText = await _recognizeOnDevice(ocrPath);
+        logStage('mlkit-ocr');
+      } catch (_) {
+        // Keep the UI responsive if the on-device recognizer rejects the image.
+      }
 
-      final ocrText = recognizedText.text.trim();
+      if (_needsBackendFallback(ocrText)) {
+        try {
+          final backendText = await OCRBackendClient.recognize(File(ocrPath));
+          ocrText = _mergeOcrText(ocrText, backendText);
+          logStage('backend-fallback');
+        } catch (_) {
+          // ML Kit remains the usable result when the optional backend is down.
+        }
+      }
+
+      if (ocrText.isEmpty) {
+        final enhancedPath = await OCRPreprocessor.createEnhancedCopy(ocrPath)
+            .timeout(const Duration(seconds: 6), onTimeout: () => null);
+        logStage('preprocess');
+        if (enhancedPath != null) {
+          try {
+            ocrText = await _recognizeOnDevice(enhancedPath);
+            logStage('mlkit-enhanced');
+          } finally {
+            try {
+              await File(enhancedPath).delete();
+            } catch (_) {}
+          }
+        }
+      }
+
+      if (roiPath != null) {
+        try {
+          await File(roiPath).delete();
+        } catch (_) {}
+      }
 
       if (!mounted) return;
 
@@ -1342,8 +1702,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
           frontDetails = details;
           frontScanned = true;
           scanTitle = '2 of 2 — BACK SIDE';
-          scanMessage =
-              'Turn the product around and scan the BACK';
+          scanMessage = 'Turn the product around and scan the BACK';
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1361,7 +1720,25 @@ class _OCRScannerPageState extends State<OCRScannerPage>
       // ------------------------------------------------------------
       // SECOND PHOTO: BACK
       // ------------------------------------------------------------
-      final backDetails = OCRService.extractBackDetails(ocrText);
+      var backDetails = OCRService.extractBackDetails(ocrText);
+      logStage('parse');
+      final dateNeedsRetry = backDetails['mfd'] == 'Not detected' ||
+          backDetails['exp'] == 'Not detected';
+        if (dateNeedsRetry && !_needsBackendFallback(ocrText)) {
+        try {
+          final dateText = await OCRBackendClient.recognize(
+            File(ocrPath),
+            mode: 'date',
+          );
+          if (dateText.isNotEmpty) {
+            ocrText = _mergeOcrText(ocrText, dateText);
+            backDetails = OCRService.extractBackDetails(ocrText);
+          }
+          logStage('date-retry');
+        } catch (_) {
+          // Keep the normal back OCR result for Review/Edit if date OCR fails.
+        }
+      }
 
       final combinedDetails = OCRService.combineDetails(
         frontDetails ?? {},
@@ -1376,12 +1753,26 @@ class _OCRScannerPageState extends State<OCRScannerPage>
         SnackBar(content: Text('Scanning error: $e')),
       );
     } finally {
+      debugPrint(
+        'OCR timing: total totalMs=${scanStopwatch.elapsedMilliseconds}',
+      );
       if (mounted) {
         setState(() {
           isProcessing = false;
         });
       }
     }
+  }
+
+  String _mergeOcrText(String first, String second) {
+    final lines = <String>[];
+    for (final text in [first, second]) {
+      for (final line in text.split(RegExp(r'\r?\n'))) {
+        final value = line.trim();
+        if (value.isNotEmpty && !lines.contains(value)) lines.add(value);
+      }
+    }
+    return lines.join('\n');
   }
 
   Future<void> _showConfirmationScreen(
@@ -1413,7 +1804,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
 
     String category = safeCategory(details['category']);
 
-    await showModalBottomSheet(
+    final product = await showModalBottomSheet<Product>(
       context: context,
       isScrollControlled: true,
       isDismissible: false,
@@ -1428,191 +1819,183 @@ class _OCRScannerPageState extends State<OCRScannerPage>
                 top: 20,
                 bottom: MediaQuery.of(context).viewInsets.bottom + 20,
               ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Center(
-                      child: Text(
-                        '🔍 Review Product',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.9,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Center(
+                        child: Text(
+                          '🔍 Review Product',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 5),
-                    const Center(
-                      child: Text(
-                        'Check both scanned sides before adding',
-                        style: TextStyle(
-                          color: Colors.grey,
-                          fontSize: 13,
+                      const SizedBox(height: 5),
+                      const Center(
+                        child: Text(
+                          'Check both scanned sides before adding',
+                          style: TextStyle(
+                            color: Colors.grey,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 20),
-
-                    TextField(
-                      controller: nameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Product Name',
-                        prefixIcon: Icon(Icons.inventory_2),
-                        border: OutlineInputBorder(),
+                      const SizedBox(height: 20),
+                      TextField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Product Name',
+                          prefixIcon: Icon(Icons.inventory_2),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    TextField(
-                      controller: brandController,
-                      decoration: const InputDecoration(
-                        labelText: 'Brand',
-                        prefixIcon: Icon(Icons.branding_watermark),
-                        border: OutlineInputBorder(),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: brandController,
+                        decoration: const InputDecoration(
+                          labelText: 'Brand',
+                          prefixIcon: Icon(Icons.branding_watermark),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    TextField(
-                      controller: qtyController,
-                      decoration: const InputDecoration(
-                        labelText: 'Quantity',
-                        hintText: 'Example: 500 g',
-                        prefixIcon: Icon(Icons.scale),
-                        border: OutlineInputBorder(),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: qtyController,
+                        decoration: const InputDecoration(
+                          labelText: 'Quantity',
+                          hintText: 'Example: 500 g',
+                          prefixIcon: Icon(Icons.scale),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    TextField(
-                      controller: priceController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: priceController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Price / MRP (₹)',
+                          prefixIcon: Icon(Icons.currency_rupee),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                      decoration: const InputDecoration(
-                        labelText: 'Price / MRP (₹)',
-                        prefixIcon: Icon(Icons.currency_rupee),
-                        border: OutlineInputBorder(),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: mfdController,
+                        decoration: const InputDecoration(
+                          labelText: 'MFD / MFG',
+                          hintText: 'DD/MM/YYYY',
+                          prefixIcon: Icon(Icons.date_range),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    TextField(
-                      controller: mfdController,
-                      decoration: const InputDecoration(
-                        labelText: 'MFD / MFG',
-                        hintText: 'DD/MM/YYYY',
-                        prefixIcon: Icon(Icons.date_range),
-                        border: OutlineInputBorder(),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: expController,
+                        decoration: const InputDecoration(
+                          labelText: 'EXP / Best Before',
+                          hintText: 'DD/MM/YYYY',
+                          prefixIcon: Icon(Icons.event),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    TextField(
-                      controller: expController,
-                      decoration: const InputDecoration(
-                        labelText: 'EXP / Best Before',
-                        hintText: 'DD/MM/YYYY',
-                        prefixIcon: Icon(Icons.event),
-                        border: OutlineInputBorder(),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: safeCategory(category),
+                        items: pantryCategories
+                            .map(
+                              (c) => DropdownMenuItem<String>(
+                                value: c,
+                                child: Text(c),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setModalState(() {
+                              category = value;
+                            });
+                          }
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Category',
+                          prefixIcon: Icon(Icons.category),
+                          border: OutlineInputBorder(),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    DropdownButtonFormField<String>(
-                      initialValue: safeCategory(category),
-                      items: pantryCategories
-                          .map(
-                            (c) => DropdownMenuItem<String>(
-                              value: c,
-                              child: Text(c),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                Navigator.pop(sheetContext);
+                                resetScanner();
+                              },
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('RETAKE'),
                             ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value != null) {
-                          setModalState(() {
-                            category = value;
-                          });
-                        }
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Category',
-                        prefixIcon: Icon(Icons.category),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              Navigator.pop(sheetContext);
-                              resetScanner();
-                            },
-                            icon: const Icon(Icons.refresh),
-                            label: const Text('RETAKE'),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () {
-                              final name =
-                                  nameController.text.trim();
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: () {
+                                final name = nameController.text.trim();
 
-                              if (name.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Product name cannot be empty',
+                                if (name.isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Product name cannot be empty',
+                                      ),
                                     ),
-                                  ),
+                                  );
+                                  return;
+                                }
+
+                                final product = Product(
+                                  id: DateTime.now()
+                                      .millisecondsSinceEpoch
+                                      .toString(),
+                                  name: name,
+                                  brand: brandController.text.trim().isEmpty
+                                      ? 'Unknown Brand'
+                                      : brandController.text.trim(),
+                                  quantity: qtyController.text.trim().isEmpty
+                                      ? 'Not detected'
+                                      : qtyController.text.trim(),
+                                  mfd: mfdController.text.trim().isEmpty
+                                      ? 'Not detected'
+                                      : mfdController.text.trim(),
+                                  exp: expController.text.trim().isEmpty
+                                      ? 'Not detected'
+                                      : expController.text.trim(),
+                                  category: safeCategory(category),
+                                  addedDate: DateTime.now(),
+                                  price: double.tryParse(
+                                        priceController.text.trim(),
+                                      ) ??
+                                      0.0,
                                 );
-                                return;
-                              }
 
-                              final product = Product(
-                                id: DateTime.now()
-                                    .millisecondsSinceEpoch
-                                    .toString(),
-                                name: name,
-                                brand: brandController.text.trim().isEmpty
-                                    ? 'Unknown Brand'
-                                    : brandController.text.trim(),
-                                quantity: qtyController.text.trim().isEmpty
-                                    ? 'Not detected'
-                                    : qtyController.text.trim(),
-                                mfd: mfdController.text.trim().isEmpty
-                                    ? 'Not detected'
-                                    : mfdController.text.trim(),
-                                exp: expController.text.trim().isEmpty
-                                    ? 'Not detected'
-                                    : expController.text.trim(),
-                                category: safeCategory(category),
-                                addedDate: DateTime.now(),
-                                price: double.tryParse(
-                                      priceController.text.trim(),
-                                    ) ??
-                                    0.0,
-                              );
-
-                              widget.onProductAdded(product);
-
-                              Navigator.pop(sheetContext);
-                              resetScanner();
-                            },
-                            icon: const Icon(Icons.check),
-                            label: const Text('ADD TO PANTRY'),
+                                Navigator.pop(sheetContext, product);
+                              },
+                              icon: const Icon(Icons.check),
+                              label: const Text('ADD TO PANTRY'),
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -1621,12 +2004,18 @@ class _OCRScannerPageState extends State<OCRScannerPage>
       },
     );
 
-    nameController.dispose();
-    brandController.dispose();
-    qtyController.dispose();
-    priceController.dispose();
-    mfdController.dispose();
-    expController.dispose();
+    if (mounted && product != null) {
+      widget.onProductAdded(product);
+    }
+
+    Future<void>.delayed(const Duration(milliseconds: 500), () {
+      nameController.dispose();
+      brandController.dispose();
+      qtyController.dispose();
+      priceController.dispose();
+      mfdController.dispose();
+      expController.dispose();
+    });
   }
 
   @override
@@ -1639,8 +2028,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
 
   @override
   Widget build(BuildContext context) {
-    if (controller == null ||
-        !controller!.value.isInitialized) {
+    if (controller == null || !controller!.value.isInitialized) {
       return const Scaffold(
         body: Center(
           child: CircularProgressIndicator(),
@@ -1655,7 +2043,6 @@ class _OCRScannerPageState extends State<OCRScannerPage>
           SizedBox.expand(
             child: CameraPreview(controller!),
           ),
-
           Positioned.fill(
             child: IgnorePointer(
               child: Container(
@@ -1663,7 +2050,6 @@ class _OCRScannerPageState extends State<OCRScannerPage>
               ),
             ),
           ),
-
           SafeArea(
             child: Column(
               children: [
@@ -1703,23 +2089,19 @@ class _OCRScannerPageState extends State<OCRScannerPage>
               ],
             ),
           ),
-
           Center(
             child: Container(
               width: 310,
               height: 260,
               decoration: BoxDecoration(
                 border: Border.all(
-                  color: frontScanned
-                      ? Colors.orange
-                      : Colors.white,
+                  color: frontScanned ? Colors.orange : Colors.white,
                   width: 3,
                 ),
                 borderRadius: BorderRadius.circular(20),
               ),
             ),
           ),
-
           Positioned(
             top: 150,
             left: 0,
@@ -1746,7 +2128,6 @@ class _OCRScannerPageState extends State<OCRScannerPage>
               ),
             ),
           ),
-
           Positioned(
             bottom: 45,
             left: 0,
@@ -1754,8 +2135,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
             child: Center(
               child: FloatingActionButton.large(
                 onPressed: isProcessing ? null : scanProduct,
-                backgroundColor:
-                    frontScanned ? Colors.orange : Colors.green,
+                backgroundColor: frontScanned ? Colors.orange : Colors.green,
                 child: isProcessing
                     ? const CircularProgressIndicator(
                         color: Colors.white,
@@ -1768,15 +2148,12 @@ class _OCRScannerPageState extends State<OCRScannerPage>
               ),
             ),
           ),
-
           Positioned(
             bottom: 50,
             right: 25,
             child: IconButton(
               icon: Icon(
-                flashMode == FlashMode.off
-                    ? Icons.flash_off
-                    : Icons.flash_on,
+                flashMode == FlashMode.off ? Icons.flash_off : Icons.flash_on,
                 color: Colors.white,
                 size: 30,
               ),
@@ -1795,7 +2172,6 @@ class _OCRScannerPageState extends State<OCRScannerPage>
               },
             ),
           ),
-
           if (frontScanned)
             Positioned(
               bottom: 55,
@@ -1807,8 +2183,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
                   color: Colors.white,
                   size: 30,
                 ),
-                onPressed:
-                    isProcessing ? null : resetScanner,
+                onPressed: isProcessing ? null : resetScanner,
               ),
             ),
         ],
@@ -1840,8 +2215,7 @@ class _RecipesScreenState extends State<RecipesScreen> {
   final List<Map<String, String>> _messages = [
     {
       'role': 'assistant',
-      'content':
-          'Hello! I am Chef AI 👨‍🍳\n\n'
+      'content': 'Hello! I am Chef AI 👨‍🍳\n\n'
           'Ask me for ANY recipe you want.\n\n'
           'For example:\n'
           '• How can I make chicken biryani?\n'
@@ -1893,8 +2267,12 @@ class _RecipesScreenState extends State<RecipesScreen> {
     _scrollToBottom();
 
     try {
-      // Send the exact recipe request to Gemini.
-      final response = await RecipeService.generateRecipe(userMessage);
+      final response = await RecipeService.generateRecipe(
+        userMessage,
+        pantryItems: widget.pantryItems
+            .map((item) => '${item.name} (${item.quantity})')
+            .toList(),
+      );
 
       if (!mounted) return;
 
@@ -1911,8 +2289,7 @@ class _RecipesScreenState extends State<RecipesScreen> {
       setState(() {
         _messages.add({
           'role': 'assistant',
-          'content':
-              '❌ Sorry, I could not generate the recipe.\n\n'
+          'content': '❌ Sorry, I could not generate the recipe.\n\n'
               'Please check your Gemini API connection and try again.\n\n'
               'Error: $e',
         });
@@ -1928,8 +2305,7 @@ class _RecipesScreenState extends State<RecipesScreen> {
       _messages.clear();
       _messages.add({
         'role': 'assistant',
-        'content':
-            'Hello! I am Chef AI 👨‍🍳\n\n'
+        'content': 'Hello! I am Chef AI 👨‍🍳\n\n'
             'Ask me for ANY recipe you want.\n\n'
             'For example:\n'
             '• Chicken Biryani\n'
@@ -1976,9 +2352,8 @@ class _RecipesScreenState extends State<RecipesScreen> {
                 final isUser = message['role'] == 'user';
 
                 return Align(
-                  alignment: isUser
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
+                  alignment:
+                      isUser ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     margin: const EdgeInsets.only(bottom: 12),
                     padding: const EdgeInsets.all(16),
@@ -2042,7 +2417,6 @@ class _RecipesScreenState extends State<RecipesScreen> {
               },
             ),
           ),
-
           if (isTyping)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -2068,7 +2442,6 @@ class _RecipesScreenState extends State<RecipesScreen> {
                 ),
               ),
             ),
-
           Container(
             padding: const EdgeInsets.all(12),
             decoration: const BoxDecoration(color: Colors.white),
@@ -2128,29 +2501,22 @@ class _RecipesScreenState extends State<RecipesScreen> {
 /// PLANNER + SHOPPING LIST
 /// ===============================================================
 
-class PlannerScreen
-    extends StatefulWidget {
-  const PlannerScreen({
+class LegacyPlannerScreen extends StatefulWidget {
+  const LegacyPlannerScreen({
     super.key,
   });
 
   @override
-  State<PlannerScreen> createState() =>
-      _PlannerScreenState();
+  State<LegacyPlannerScreen> createState() => _LegacyPlannerScreenState();
 }
 
-class _PlannerScreenState
-    extends State<PlannerScreen>
+class _LegacyPlannerScreenState extends State<LegacyPlannerScreen>
     with SingleTickerProviderStateMixin {
-  late TabController
-      _tabController;
+  late TabController _tabController;
 
-  List<ShoppingItem>
-      shoppingList = [];
+  List<ShoppingItem> shoppingList = [];
 
-  final TextEditingController
-      _shoppingController =
-      TextEditingController();
+  final TextEditingController _shoppingController = TextEditingController();
 
   final List<String> weekDays = [
     'Mon',
@@ -2162,25 +2528,23 @@ class _PlannerScreenState
     'Sun',
   ];
 
-  Map<String, String>
-      mealPlan = {};
+  Map<String, String> mealPlan = {};
 
   @override
   void initState() {
     super.initState();
 
-    _tabController =
-        TabController(
+    mealPlan = {
+      for (final day in weekDays) day: 'No meal planned',
+    };
+
+    _tabController = TabController(
       length: 2,
       vsync: this,
     );
 
     _loadShoppingList();
-
-    for (final day in weekDays) {
-      mealPlan[day] =
-          'No meal planned';
-    }
+    _loadMealPlan();
   }
 
   @override
@@ -2190,12 +2554,9 @@ class _PlannerScreenState
     super.dispose();
   }
 
-  Future<void>
-      _loadShoppingList() async {
+  Future<void> _loadShoppingList() async {
     try {
-      final items =
-          await StorageService
-              .loadShoppingList();
+      final items = await StorageService.loadShoppingList();
 
       if (!mounted) return;
 
@@ -2205,19 +2566,40 @@ class _PlannerScreenState
     } catch (_) {}
   }
 
-  Future<void>
-      _saveShoppingList() async {
-    await StorageService
-        .saveShoppingList(
+  Future<void> _saveShoppingList() async {
+    await StorageService.saveShoppingList(
       shoppingList,
     );
   }
 
+  Future<void> _loadMealPlan() async {
+    try {
+      final saved = await StorageService.loadMealPlan();
+      if (!mounted) return;
+
+      setState(() {
+        final planner = {...mealPlan};
+        for (final day in weekDays) {
+          planner[day] = saved[day] ?? 'No meal planned';
+        }
+        mealPlan = planner;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        for (final day in weekDays) {
+          mealPlan[day] = 'No meal planned';
+        }
+      });
+    }
+  }
+
+  Future<void> _saveMealPlan() async {
+    await StorageService.saveMealPlan(mealPlan);
+  }
+
   void _addShoppingItem() {
-    final name =
-        _shoppingController
-            .text
-            .trim();
+    final name = _shoppingController.text.trim();
 
     if (name.isEmpty) {
       return;
@@ -2226,11 +2608,7 @@ class _PlannerScreenState
     setState(() {
       shoppingList.add(
         ShoppingItem(
-          id: DateTime
-              .now()
-              .millisecondsSinceEpoch
-              .toString(),
-
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
           name: name,
         ),
       );
@@ -2246,9 +2624,7 @@ class _PlannerScreenState
     return Column(
       children: [
         TabBar(
-          controller:
-              _tabController,
-
+          controller: _tabController,
           tabs: const [
             Tab(
               text: 'Weekly Planner',
@@ -2256,7 +2632,6 @@ class _PlannerScreenState
                 Icons.calendar_month,
               ),
             ),
-
             Tab(
               text: 'Shopping List',
               icon: Icon(
@@ -2265,12 +2640,9 @@ class _PlannerScreenState
             ),
           ],
         ),
-
         Expanded(
           child: TabBarView(
-            controller:
-                _tabController,
-
+            controller: _tabController,
             children: [
               buildWeeklyPlanner(),
               buildShoppingList(),
@@ -2283,56 +2655,36 @@ class _PlannerScreenState
 
   Widget buildWeeklyPlanner() {
     return ListView.builder(
-      padding:
-          const EdgeInsets.all(16),
-
-      itemCount:
-          weekDays.length,
-
-      itemBuilder:
-          (context, index) {
-        final day =
-            weekDays[index];
+      padding: const EdgeInsets.all(16),
+      itemCount: weekDays.length,
+      itemBuilder: (context, index) {
+        final day = weekDays[index];
 
         return Card(
-          margin:
-              const EdgeInsets.only(
+          margin: const EdgeInsets.only(
             bottom: 10,
           ),
-
           child: ListTile(
-            leading:
-                CircleAvatar(
-              backgroundColor:
-                  Colors.green
-                      .shade100,
-
+            leading: CircleAvatar(
+              backgroundColor: Colors.green.shade100,
               child: Text(
                 day[0],
               ),
             ),
-
             title: Text(
               day,
-              style:
-                  const TextStyle(
-                fontWeight:
-                    FontWeight.bold,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
               ),
             ),
-
             subtitle: Text(
               mealPlan[day]!,
             ),
-
-            trailing:
-                IconButton(
+            trailing: IconButton(
               icon: const Icon(
                 Icons.edit_outlined,
               ),
-
-              onPressed: () =>
-                  _editMeal(day),
+              onPressed: () => _editMeal(day),
             ),
           ),
         );
@@ -2343,69 +2695,47 @@ class _PlannerScreenState
   void _editMeal(
     String day,
   ) {
-    final controller =
-        TextEditingController(
-      text:
-          mealPlan[day] ==
-                  'No meal planned'
-              ? ''
-              : mealPlan[day],
+    final controller = TextEditingController(
+      text: mealPlan[day] == 'No meal planned' ? '' : mealPlan[day],
     );
 
     showDialog(
       context: context,
-
-      builder:
-          (dialogContext) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: Text(
             'Plan Meal for $day',
           ),
-
           content: TextField(
             controller: controller,
-
-            decoration:
-                const InputDecoration(
-              hintText:
-                  'Enter dish name',
+            decoration: const InputDecoration(
+              hintText: 'Enter dish name',
             ),
           ),
-
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.pop(
+              onPressed: () => Navigator.pop(
                 dialogContext,
               ),
-
-              child:
-                  const Text(
+              child: const Text(
                 'CANCEL',
               ),
             ),
-
             TextButton(
               onPressed: () {
                 setState(() {
-                  mealPlan[day] =
-                      controller
-                              .text
-                              .trim()
-                              .isEmpty
-                          ? 'No meal planned'
-                          : controller
-                              .text
-                              .trim();
+                  mealPlan[day] = controller.text.trim().isEmpty
+                      ? 'No meal planned'
+                      : controller.text.trim();
                 });
+
+                _saveMealPlan();
 
                 Navigator.pop(
                   dialogContext,
                 );
               },
-
-              child:
-                  const Text(
+              child: const Text(
                 'SAVE',
               ),
             ),
@@ -2419,145 +2749,85 @@ class _PlannerScreenState
     return Column(
       children: [
         Padding(
-          padding:
-              const EdgeInsets.all(
+          padding: const EdgeInsets.all(
             16,
           ),
-
           child: Row(
             children: [
               Expanded(
                 child: TextField(
-                  controller:
-                      _shoppingController,
-
-                  decoration:
-                      InputDecoration(
-                    hintText:
-                        'Add item to list...',
-
+                  controller: _shoppingController,
+                  decoration: InputDecoration(
+                    hintText: 'Add item to list...',
                     filled: true,
-
-                    fillColor:
-                        Colors.white,
-
-                    border:
-                        OutlineInputBorder(
-                      borderRadius:
-                          BorderRadius
-                              .circular(
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
                         15,
                       ),
-
-                      borderSide:
-                          BorderSide.none,
+                      borderSide: BorderSide.none,
                     ),
                   ),
-
-                  onSubmitted:
-                      (_) =>
-                          _addShoppingItem(),
+                  onSubmitted: (_) => _addShoppingItem(),
                 ),
               ),
-
               const SizedBox(
                 width: 10,
               ),
-
               IconButton.filled(
-                onPressed:
-                    _addShoppingItem,
-
+                onPressed: _addShoppingItem,
                 icon: const Icon(
                   Icons.add,
                 ),
-
-                style:
-                    IconButton.styleFrom(
-                  backgroundColor:
-                      Colors.green,
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.green,
                 ),
               ),
             ],
           ),
         ),
-
         Expanded(
-          child: shoppingList
-                  .isEmpty
+          child: shoppingList.isEmpty
               ? const Center(
                   child: Text(
                     'Your shopping list is empty.',
                   ),
                 )
-
               : ListView.builder(
-                  padding:
-                      const EdgeInsets
-                          .symmetric(
+                  padding: const EdgeInsets.symmetric(
                     horizontal: 16,
                   ),
-
-                  itemCount:
-                      shoppingList.length,
-
-                  itemBuilder:
-                      (context, index) {
-                    final item =
-                        shoppingList[index];
+                  itemCount: shoppingList.length,
+                  itemBuilder: (context, index) {
+                    final item = shoppingList[index];
 
                     return Card(
-                      child:
-                          CheckboxListTile(
-                        value:
-                            item.isBought,
-
-                        onChanged:
-                            (value) {
+                      child: CheckboxListTile(
+                        value: item.isBought,
+                        onChanged: (value) {
                           setState(() {
-                            item.isBought =
-                                value ??
-                                    false;
+                            item.isBought = value ?? false;
                           });
 
                           _saveShoppingList();
                         },
-
                         title: Text(
                           item.name,
-
-                          style:
-                              TextStyle(
-                            decoration:
-                                item.isBought
-                                    ? TextDecoration
-                                        .lineThrough
-                                    : null,
-
-                            color:
-                                item.isBought
-                                    ? Colors
-                                        .grey
-                                    : Colors
-                                        .black,
+                          style: TextStyle(
+                            decoration: item.isBought
+                                ? TextDecoration.lineThrough
+                                : null,
+                            color: item.isBought ? Colors.grey : Colors.black,
                           ),
                         ),
-
-                        secondary:
-                            IconButton(
-                          icon:
-                              const Icon(
-                            Icons
-                                .delete_outline,
-                            color:
-                                Colors.red,
+                        secondary: IconButton(
+                          icon: const Icon(
+                            Icons.delete_outline,
+                            color: Colors.red,
                           ),
-
-                          onPressed:
-                              () {
+                          onPressed: () {
                             setState(() {
-                              shoppingList
-                                  .removeAt(
+                              shoppingList.removeAt(
                                 index,
                               );
                             });
@@ -2579,10 +2849,8 @@ class _PlannerScreenState
 /// ANALYTICS
 /// ===============================================================
 
-class AnalyticsScreen
-    extends StatelessWidget {
-  final List<Product>
-      pantryItems;
+class AnalyticsScreen extends StatelessWidget {
+  final List<Product> pantryItems;
 
   const AnalyticsScreen({
     super.key,
@@ -2592,9 +2860,7 @@ class AnalyticsScreen
   String _getStatus(
     String expDate,
   ) {
-    if (expDate.isEmpty ||
-        expDate.toLowerCase() ==
-            'not detected') {
+    if (expDate.isEmpty || expDate.toLowerCase() == 'not detected') {
       return 'Fresh';
     }
 
@@ -2609,9 +2875,7 @@ class AnalyticsScreen
 
     for (final format in formats) {
       try {
-        date =
-            DateFormat(format)
-                .parseStrict(expDate);
+        date = DateFormat(format).parseStrict(expDate);
 
         break;
       } catch (_) {}
@@ -2632,54 +2896,39 @@ class AnalyticsScreen
 
   @override
   Widget build(BuildContext context) {
-    final monthlySpending =
-        pantryItems.fold<double>(
+    final monthlySpending = pantryItems.fold<double>(
       0.0,
-      (sum, item) =>
-          sum + item.price,
+      (sum, item) => sum + item.price,
     );
 
-    final foodWasteValue =
-        pantryItems
-            .where(
-              (item) =>
-                  _getStatus(
-                    item.exp,
-                  ) ==
-                  'Expired',
-            )
-            .fold<double>(
-              0.0,
-              (sum, item) =>
-                  sum +
-                  (item.price > 0
-                      ? item.price
-                      : 45.0),
-            );
+    final foodWasteValue = pantryItems
+        .where(
+          (item) =>
+              _getStatus(
+                item.exp,
+              ) ==
+              'Expired',
+        )
+        .fold<double>(
+          0.0,
+          (sum, item) => sum + (item.price > 0 ? item.price : 45.0),
+        );
 
-    final totalItems =
-        pantryItems.length;
+    final totalItems = pantryItems.length;
 
     return SingleChildScrollView(
-      padding:
-          const EdgeInsets.all(16),
-
+      padding: const EdgeInsets.all(16),
       child: Column(
-        crossAxisAlignment:
-            CrossAxisAlignment.start,
-
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Analytics Dashboard',
             style: TextStyle(
               fontSize: 22,
-              fontWeight:
-                  FontWeight.bold,
+              fontWeight: FontWeight.bold,
             ),
           ),
-
           const SizedBox(height: 20),
-
           _analyticsCard(
             'Budget Tracker',
             'Total Spending: ₹${monthlySpending.toStringAsFixed(2)}',
@@ -2687,9 +2936,7 @@ class AnalyticsScreen
             Icons.account_balance_wallet,
             Colors.blue,
           ),
-
           const SizedBox(height: 15),
-
           _analyticsCard(
             'Food Waste Analytics',
             'Waste Value: ₹${foodWasteValue.toStringAsFixed(2)}',
@@ -2697,9 +2944,7 @@ class AnalyticsScreen
             Icons.delete_sweep,
             Colors.red,
           ),
-
           const SizedBox(height: 15),
-
           _analyticsCard(
             'Pantry Inventory',
             '$totalItems Items',
@@ -2707,28 +2952,22 @@ class AnalyticsScreen
             Icons.inventory_2,
             Colors.green,
           ),
-
           const SizedBox(height: 30),
-
           const Text(
             'Category Distribution',
             style: TextStyle(
               fontSize: 18,
-              fontWeight:
-                  FontWeight.bold,
+              fontWeight: FontWeight.bold,
             ),
           ),
-
           const SizedBox(height: 15),
-
           ..._buildCategoryRows(),
         ],
       ),
     );
   }
 
-  List<Widget>
-      _buildCategoryRows() {
+  List<Widget> _buildCategoryRows() {
     if (pantryItems.isEmpty) {
       return [
         const Text(
@@ -2740,75 +2979,48 @@ class AnalyticsScreen
       ];
     }
 
-    final Map<String, int>
-        counts = {};
+    final Map<String, int> counts = {};
 
-    for (final item
-        in pantryItems) {
-      counts[item.category] =
-          (counts[item.category] ??
-                  0) +
-              1;
+    for (final item in pantryItems) {
+      counts[item.category] = (counts[item.category] ?? 0) + 1;
     }
 
-    final total =
-        pantryItems.length;
+    final total = pantryItems.length;
 
     return counts.entries.map(
       (entry) {
-        final percentage =
-            entry.value / total;
+        final percentage = entry.value / total;
 
         return Padding(
-          padding:
-              const EdgeInsets.only(
+          padding: const EdgeInsets.only(
             bottom: 15,
           ),
-
           child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment
-                    .start,
-
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                mainAxisAlignment:
-                    MainAxisAlignment
-                        .spaceBetween,
-
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     entry.key,
-                    style:
-                        const TextStyle(
-                      fontWeight:
-                          FontWeight.w500,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
                     ),
                   ),
-
                   Text(
                     '${(percentage * 100).round()}%',
                   ),
                 ],
               ),
-
               const SizedBox(
                 height: 5,
               ),
-
               LinearProgressIndicator(
                 value: percentage,
-
-                backgroundColor:
-                    Colors.grey
-                        .shade200,
-
-                borderRadius:
-                    BorderRadius
-                        .circular(
+                backgroundColor: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(
                   10,
                 ),
-
                 minHeight: 8,
               ),
             ],
@@ -2826,91 +3038,65 @@ class AnalyticsScreen
     Color color,
   ) {
     return Container(
-      padding:
-          const EdgeInsets.all(
+      padding: const EdgeInsets.all(
         20,
       ),
-
-      decoration:
-          BoxDecoration(
+      decoration: BoxDecoration(
         color: Colors.white,
-
-        borderRadius:
-            BorderRadius.circular(
+        borderRadius: BorderRadius.circular(
           20,
         ),
-
         boxShadow: [
           BoxShadow(
-            color: Colors.black
-                .withValues(
+            color: Colors.black.withValues(
               alpha: 0.05,
             ),
-
             blurRadius: 10,
           ),
         ],
       ),
-
       child: Row(
         children: [
           CircleAvatar(
             radius: 30,
-
-            backgroundColor:
-                color.withValues(
+            backgroundColor: color.withValues(
               alpha: 0.1,
             ),
-
             child: Icon(
               icon,
               color: color,
               size: 30,
             ),
           ),
-
           const SizedBox(
             width: 20,
           ),
-
           Expanded(
             child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment
-                      .start,
-
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   title,
-                  style:
-                      const TextStyle(
+                  style: const TextStyle(
                     fontSize: 14,
-                    color:
-                        Colors.grey,
+                    color: Colors.grey,
                   ),
                 ),
-
                 Text(
                   value,
-                  style:
-                      const TextStyle(
+                  style: const TextStyle(
                     fontSize: 20,
-                    fontWeight:
-                        FontWeight.bold,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-
                 const SizedBox(
                   height: 5,
                 ),
-
                 Text(
                   description,
-                  style:
-                      const TextStyle(
+                  style: const TextStyle(
                     fontSize: 12,
-                    color:
-                        Colors.black54,
+                    color: Colors.black54,
                   ),
                 ),
               ],
