@@ -44,4 +44,5 @@ pytest recipe_agent
 flutter test
 
 ## Team
-<Add your team members and guide here>
+K Janshi
+L Jahnavy
