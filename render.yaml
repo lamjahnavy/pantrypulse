@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: pantrypulse-recipe-agent
+    runtime: python
+    plan: free
+    rootDir: Smart_Pantry_AI
+    buildCommand: pip install -r recipe_agent/requirements.txt
+    # One worker keeps duplicate-request tracking in a single process.
+    startCommand: gunicorn recipe_agent.app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: RECIPE_GEMINI_MODEL
+        value: gemini-3.5-flash
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: RECIPE_AGENT_TOKEN
+        sync: false
