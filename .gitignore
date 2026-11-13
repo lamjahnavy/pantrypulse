@@ -1,0 +1,20 @@
+# Local Python environment (2 GB; recreate from requirements.txt)
+.venv*/
+__pycache__/
+*.pyc
+
+# Secrets and editor/backup leftovers
+.env
+.env.*
+!.env.example
+*.bak
+~$*
+
+# Large local data kept on disk only
+Smart_Pantry_Datasets/
+thesis/
+Smart_Pantry_AI/ocr_backend/debug/
+Smart_Pantry_AI/ocr_backend/*.log
+# Training checkpoints; the exported weights the app loads are still committed.
+Smart_Pantry_AI/ocr_backend/dataset/training_runs/*
+!Smart_Pantry_AI/ocr_backend/dataset/training_runs/custom_recognizer_export/

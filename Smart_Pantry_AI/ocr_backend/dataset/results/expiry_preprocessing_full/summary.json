@@ -1,0 +1,65 @@
+{
+  "engine": "keras_ocr",
+  "model_status": "pretrained baseline; no training or fine-tuning",
+  "dataset": "Products-Real/evaluation",
+  "records_requested": 665,
+  "records_with_failures": 1,
+  "normalization": "trim and collapse whitespace only",
+  "variants": {
+    "original_crop": {
+      "records_processed": 664,
+      "correct_predictions": 8,
+      "failed_predictions": 656,
+      "exact_normalized_text_accuracy": 0.012048192771084338,
+      "mean_cer": 0.6920832138076114
+    },
+    "upscaled_crop": {
+      "records_processed": 664,
+      "correct_predictions": 1,
+      "failed_predictions": 663,
+      "exact_normalized_text_accuracy": 0.0015060240963855422,
+      "mean_cer": 0.8428512752307933
+    },
+    "grayscale_contrast": {
+      "records_processed": 664,
+      "correct_predictions": 2,
+      "failed_predictions": 662,
+      "exact_normalized_text_accuracy": 0.0030120481927710845,
+      "mean_cer": 0.7574376510370486
+    },
+    "adaptive_threshold": {
+      "records_processed": 664,
+      "correct_predictions": 0,
+      "failed_predictions": 664,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.7521333168170518
+    },
+    "upscaled_contrast": {
+      "records_processed": 664,
+      "correct_predictions": 0,
+      "failed_predictions": 664,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.8370776395625793
+    },
+    "upscaled_adaptive": {
+      "records_processed": 664,
+      "correct_predictions": 0,
+      "failed_predictions": 664,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.8763713946695874
+    },
+    "upscaled_sharpened_contrast": {
+      "records_processed": 664,
+      "correct_predictions": 0,
+      "failed_predictions": 664,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.8357176541664494
+    }
+  },
+  "failures": [
+    {
+      "image": "test_00545.jpg",
+      "error": "ValueError: Invalid crop box [1214, 1749, 1358, 1780] for image 2016x1512"
+    }
+  ]
+}

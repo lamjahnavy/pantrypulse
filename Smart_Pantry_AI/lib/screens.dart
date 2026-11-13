@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
 
 import 'product_model.dart';
 import 'shopping_model.dart';
@@ -11,8 +13,9 @@ import 'planner_screen.dart';
 import 'storage_service.dart';
 import 'ocr_service.dart';
 import 'recipe_service.dart';
+import 'recipe_agent_client.dart';
+import 'services/recipe_models.dart';
 import 'notification_service.dart';
-import 'ocr_preprocessing.dart';
 import 'ocr_backend_client.dart';
 import 'ocr_roi.dart';
 import 'profile_screen.dart';
@@ -31,6 +34,30 @@ const List<String> pantryCategories = [
   'Groceries',
   'Others',
 ];
+
+const String _ocrCameraPreset = String.fromEnvironment(
+  'OCR_CAMERA_PRESET',
+  defaultValue: 'high',
+);
+const String _ocrBlurThresholdRaw = String.fromEnvironment(
+  'OCR_BLUR_THRESHOLD',
+  defaultValue: '0',
+);
+final double _ocrBlurThreshold = double.tryParse(_ocrBlurThresholdRaw) ?? 0;
+
+ResolutionPreset _configuredOcrCameraPreset() {
+  switch (_ocrCameraPreset.toLowerCase()) {
+    case 'veryhigh':
+      return ResolutionPreset.veryHigh;
+    case 'ultrahigh':
+      return ResolutionPreset.ultraHigh;
+    case 'max':
+      return ResolutionPreset.max;
+    case 'high':
+    default:
+      return ResolutionPreset.high;
+  }
+}
 
 /// Makes sure an OCR/manual category is always valid for the dropdown.
 String safeCategory(String? category) {
@@ -1456,12 +1483,19 @@ class OCRScannerPage extends StatefulWidget {
   State<OCRScannerPage> createState() => _OCRScannerPageState();
 }
 
+class _OcrScanData {
+  final String text;
+  final List<dynamic> detections;
+
+  const _OcrScanData({
+    required this.text,
+    required this.detections,
+  });
+}
+
 class _OCRScannerPageState extends State<OCRScannerPage>
     with WidgetsBindingObserver {
   CameraController? controller;
-
-  final TextRecognizer textRecognizer =
-      TextRecognizer(script: TextRecognitionScript.latin);
 
   bool isProcessing = false;
   FlashMode flashMode = FlashMode.off;
@@ -1471,6 +1505,8 @@ class _OCRScannerPageState extends State<OCRScannerPage>
 
   String scanTitle = '1 of 2 — FRONT SIDE';
   String scanMessage = 'Scan the FRONT of the product';
+  Future<_OcrScanData>? _frontOcrFuture;
+  Future<Map<String, String>?>? _frontVisionFuture;
 
   @override
   void initState() {
@@ -1539,7 +1575,7 @@ class _OCRScannerPageState extends State<OCRScannerPage>
 
     final newController = CameraController(
       camera,
-      ResolutionPreset.high,
+      _configuredOcrCameraPreset(),
       enableAudio: false,
     );
 
@@ -1570,20 +1606,59 @@ class _OCRScannerPageState extends State<OCRScannerPage>
     setState(() {
       frontScanned = false;
       frontDetails = null;
+      _frontOcrFuture = null;
+      _frontVisionFuture = null;
       scanTitle = '1 of 2 — FRONT SIDE';
       scanMessage = 'Scan the FRONT of the product';
     });
   }
 
-  Future<String> _recognizeOnDevice(String path) async {
-    final recognizedText = await textRecognizer.processImage(
-      InputImage.fromFilePath(path),
+  Future<_OcrScanData> _recognizeCapturedImage({
+    required String fullImagePath,
+    required String ocrPath,
+    required String ocrSource,
+    required bool isFront,
+  }) async {
+    var result = await OCRBackendClient.recognize(
+      File(ocrPath),
+      source: ocrSource,
     );
-    return recognizedText.text.trim();
+    var text = result.text;
+    var detections = result.detections;
+
+    if (_needsFullImageFallbackFor(text, isFront) && ocrPath != fullImagePath) {
+      final fullImageResult = await OCRBackendClient.recognize(
+        File(fullImagePath),
+        source: 'full',
+      );
+      if (!fullImageResult.isEmpty) {
+        text = _mergeOcrText(text, fullImageResult.text);
+        detections = [...detections, ...fullImageResult.detections];
+      }
+    }
+
+    return _OcrScanData(text: text, detections: detections);
   }
 
-  bool _needsBackendFallback(String text) {
-    if (text.trim().length < 12) return true;
+  bool _needsFullImageFallbackFor(String text, bool isFront) {
+    if (text.trim().isEmpty) return true;
+    if (isFront) {
+      final details = OCRService.extractFrontDetails(text);
+      return details['name'] == 'Unknown Product' &&
+          details['brand'] == 'Unknown Brand';
+    }
+    final details = OCRService.extractBackDetails(text);
+    final missingFields = [
+      details['quantity'],
+      details['price'],
+      details['mfd'],
+      details['exp'],
+    ].where((value) => value == 'Not detected' || value == '0.00').length;
+    return missingFields >= 4;
+  }
+
+  bool _needsFullImageFallback(String text) {
+    if (text.trim().isEmpty) return true;
 
     if (!frontScanned) {
       final details = OCRService.extractFrontDetails(text);
@@ -1626,62 +1701,220 @@ class _OCRScannerPageState extends State<OCRScannerPage>
         ..start();
     }
 
+    final roiLease = OCRTemporaryFileLease();
+    var scanSucceeded = false;
+    double? captureSharpness;
+    int? captureWidth;
+    int? captureHeight;
+
+    Future<void> cleanupRoi() async {
+      await roiLease.dispose();
+    }
+
     try {
+      if (mounted) {
+        setState(() {
+          scanMessage =
+              frontScanned ? 'Capturing the BACK...' : 'Capturing the FRONT...';
+        });
+      }
       final XFile image = await cameraController.takePicture();
+      captureSharpness = await OCRRegionOfInterest.measureSharpness(image.path);
+      final captured = img.decodeImage(await image.readAsBytes());
+      captureWidth = captured?.width;
+      captureHeight = captured?.height;
+      debugPrint(
+        'OCR capture quality: sharpness=${captureSharpness?.toStringAsFixed(2) ?? 'unknown'} '
+        'threshold=$_ocrBlurThreshold',
+      );
+      final lowSharpness = captureSharpness;
+      if (!mounted) return;
+      if (lowSharpness != null &&
+          _ocrBlurThreshold > 0 &&
+          lowSharpness < _ocrBlurThreshold) {
+        final useAnyway = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: const Text('Photo may be blurry'),
+              content: Text(
+                'Sharpness ${lowSharpness.toStringAsFixed(0)} is below '
+                'the threshold $_ocrBlurThreshold. You can retake it or '
+                'send it to OCR anyway.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Retake'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Use anyway'),
+                ),
+              ],
+            );
+          },
+        );
+        if (!mounted) return;
+        if (useAnyway != true) {
+          debugPrint(
+            'OCR capture result: sharpness=${lowSharpness.toStringAsFixed(2)} '
+            'resolution=${captureWidth}x$captureHeight succeeded=false '
+            'continued=false',
+          );
+          return;
+        }
+      }
+      if (kDebugMode) {
+        debugPrint(
+          'OCR capture: resolution=${captured?.width}x${captured?.height} '
+          'bytes=${await File(image.path).length()}',
+        );
+      }
       logStage('capture');
 
+      if (!mounted) return;
+      setState(() {
+        scanMessage = 'Preparing image...';
+      });
       final previewSize = MediaQuery.sizeOf(context);
-      final roiPath = await OCRRegionOfInterest.cropGuideRegion(
+      roiLease.path = await OCRRegionOfInterest.cropGuideRegion(
         sourcePath: image.path,
         previewWidth: previewSize.width,
         previewHeight: previewSize.height,
       );
-      logStage('roi');
-      final ocrPath = roiPath ?? image.path;
-      String ocrText = '';
-
-      try {
-        ocrText = await _recognizeOnDevice(ocrPath);
-        logStage('mlkit-ocr');
-      } catch (_) {
-        // Keep the UI responsive if the on-device recognizer rejects the image.
-      }
-
-      if (_needsBackendFallback(ocrText)) {
-        try {
-          final backendText = await OCRBackendClient.recognize(File(ocrPath));
-          ocrText = _mergeOcrText(ocrText, backendText);
-          logStage('backend-fallback');
-        } catch (_) {
-          // ML Kit remains the usable result when the optional backend is down.
-        }
-      }
-
-      if (ocrText.isEmpty) {
-        final enhancedPath = await OCRPreprocessor.createEnhancedCopy(ocrPath)
-            .timeout(const Duration(seconds: 6), onTimeout: () => null);
-        logStage('preprocess');
-        if (enhancedPath != null) {
-          try {
-            ocrText = await _recognizeOnDevice(enhancedPath);
-            logStage('mlkit-enhanced');
-          } finally {
-            try {
-              await File(enhancedPath).delete();
-            } catch (_) {}
+      final roiTimings = OCRRegionOfInterest.lastTimingsMs;
+      debugPrint(
+        'OCR timing: roiCropMs=${roiTimings['roi_crop_ms'] ?? 0} '
+        'jpegEncodeMs=${roiTimings['jpeg_encode_ms'] ?? 0}',
+      );
+      logStage('roi-jpeg');
+      final ocrPath = roiLease.path ?? image.path;
+      final ocrSource = roiLease.path == null ? 'full' : 'roi';
+      if (!frontScanned) {
+        final frontRoiPath = roiLease.path;
+        roiLease.path = null;
+        _frontOcrFuture = _recognizeCapturedImage(
+          fullImagePath: image.path,
+          ocrPath: ocrPath,
+          ocrSource: ocrSource,
+          isFront: true,
+        ).then((result) async {
+          if (kDebugMode) {
+            debugPrint(
+              'OCR capture result: sharpness=${captureSharpness?.toStringAsFixed(2)} '
+              'resolution=${captureWidth}x$captureHeight succeeded=true '
+              'continued=true side=front',
+            );
           }
+          // Only when our OCR is unsure of brand/name, ask the vision
+          // fallback. Read the photo now: the ROI file is deleted afterwards.
+          final ocrFront = OCRService.extractFrontDetailsFromOCR(
+            result.text,
+            result.detections,
+          );
+          if (OCRService.frontNeedsVisionFallback(ocrFront)) {
+            try {
+              final bytes = await File(frontRoiPath ?? image.path).readAsBytes();
+              _frontVisionFuture = RecipeAgentClient.identifyProduct(bytes);
+            } on FileSystemException catch (error) {
+              debugPrint('Vision fallback skipped: $error');
+            }
+          }
+          return result;
+        }, onError: (Object error, StackTrace stackTrace) {
+          if (kDebugMode) {
+            debugPrint(
+              'OCR capture result: sharpness=${captureSharpness?.toStringAsFixed(2)} '
+              'resolution=${captureWidth}x$captureHeight succeeded=false '
+              'continued=true side=front error=$error',
+            );
+          }
+          Error.throwWithStackTrace(error, stackTrace);
+        }).whenComplete(() async {
+          if (frontRoiPath != null) {
+            try {
+              await File(frontRoiPath).delete();
+            } on FileSystemException {
+              // Cleanup is idempotent when the temporary file is already gone.
+            }
+          }
+        });
+        if (mounted) {
+          setState(() {
+            frontDetails = const {
+              'name': 'Reading front...',
+              'brand': 'Reading front...',
+            };
+            frontScanned = true;
+            scanTitle = '2 of 2 — BACK SIDE';
+            scanMessage = 'Turn the product around and scan the BACK';
+          });
         }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Front scan started. Turn the product around and scan the back side.'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
       }
-
-      if (roiPath != null) {
-        try {
-          await File(roiPath).delete();
-        } catch (_) {}
+      if (mounted) {
+        setState(() {
+          scanMessage = 'Reading product text...';
+        });
       }
+      if (kDebugMode) {
+        final roiImage = img.decodeImage(await File(ocrPath).readAsBytes());
+        debugPrint(
+          'OCR upload: source=$ocrSource resolution='
+          '${roiImage?.width}x${roiImage?.height} '
+          'bytes=${await File(ocrPath).length()}',
+        );
+      }
+      var ocrResult = await OCRBackendClient.recognize(
+        File(ocrPath),
+        source: ocrSource,
+      );
+      debugPrint(
+        'OCR timing: uploadBytes=${await File(ocrPath).length()} '
+        'backendMs=${ocrResult.processingMs} '
+        'requestElapsedMs=${ocrResult.requestElapsedMs} '
+        'uploadAndNetworkMs=${ocrResult.uploadAndNetworkMs}',
+      );
+      logStage('keras-ocr');
 
       if (!mounted) return;
 
-      if (ocrText.isEmpty) {
+      var ocrText = ocrResult.text;
+      var ocrDetections = ocrResult.detections;
+      var usedFullImageFallback = false;
+      if (_needsFullImageFallback(ocrText) && ocrPath != image.path) {
+        debugPrint('OCR fallback: retrying original full-resolution image');
+        try {
+          final fullImageResult = await OCRBackendClient.recognize(
+            File(image.path),
+            source: 'full',
+          );
+          usedFullImageFallback = true;
+          if (!fullImageResult.isEmpty) {
+            ocrText = _mergeOcrText(ocrText, fullImageResult.text);
+            ocrDetections = [
+              ...ocrDetections,
+              ...fullImageResult.detections,
+            ];
+          }
+        } on OCRBackendException catch (error) {
+          debugPrint('OCR full-image fallback failed: $error');
+        }
+        logStage('full-image-fallback');
+      }
+
+      if (ocrText.trim().isEmpty) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -1693,59 +1926,84 @@ class _OCRScannerPageState extends State<OCRScannerPage>
       }
 
       // ------------------------------------------------------------
-      // FIRST PHOTO: FRONT
-      // ------------------------------------------------------------
-      if (!frontScanned) {
-        final details = OCRService.extractFrontDetails(ocrText);
-
-        setState(() {
-          frontDetails = details;
-          frontScanned = true;
-          scanTitle = '2 of 2 — BACK SIDE';
-          scanMessage = 'Turn the product around and scan the BACK';
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              '✅ Front scan complete. Now scan the back side.',
-            ),
-            duration: Duration(seconds: 3),
-          ),
-        );
-
-        return;
-      }
-
-      // ------------------------------------------------------------
       // SECOND PHOTO: BACK
       // ------------------------------------------------------------
-      var backDetails = OCRService.extractBackDetails(ocrText);
+      var backDetails = OCRService.extractBackDetailsFromOCR(
+        ocrText,
+        ocrDetections,
+      );
       logStage('parse');
       final dateNeedsRetry = backDetails['mfd'] == 'Not detected' ||
           backDetails['exp'] == 'Not detected';
-        if (dateNeedsRetry && !_needsBackendFallback(ocrText)) {
+      if (dateNeedsRetry) {
+        if (mounted) {
+          setState(() {
+            scanMessage = 'Checking package dates...';
+          });
+        }
         try {
-          final dateText = await OCRBackendClient.recognize(
-            File(ocrPath),
+          final dateResult = await OCRBackendClient.recognize(
+            File(usedFullImageFallback ? image.path : ocrPath),
             mode: 'date',
+            source: usedFullImageFallback ? 'full' : ocrSource,
           );
-          if (dateText.isNotEmpty) {
-            ocrText = _mergeOcrText(ocrText, dateText);
-            backDetails = OCRService.extractBackDetails(ocrText);
+          if (!dateResult.isEmpty) {
+            ocrText = _mergeOcrText(ocrText, dateResult.text);
+            ocrDetections = [
+              ...ocrDetections,
+              ...dateResult.detections,
+            ];
+            backDetails = OCRService.extractBackDetailsFromOCR(
+              ocrText,
+              ocrDetections,
+            );
           }
           logStage('date-retry');
-        } catch (_) {
-          // Keep the normal back OCR result for Review/Edit if date OCR fails.
+        } on OCRBackendException catch (error) {
+          debugPrint('OCR date retry failed: $error');
         }
       }
+      logStage('parse');
 
+      final pendingFront = _frontOcrFuture;
+      if (pendingFront != null) {
+        final frontResult = await pendingFront;
+        var details = OCRService.extractFrontDetailsFromOCR(
+          frontResult.text,
+          frontResult.detections,
+        );
+        final pendingVision = _frontVisionFuture;
+        _frontVisionFuture = null;
+        if (pendingVision != null) {
+          if (mounted) {
+            setState(() {
+              scanMessage = 'Identifying product...';
+            });
+          }
+          final vision = await pendingVision;
+          if (vision != null) {
+            details = OCRService.mergeVisionDetails(details, vision);
+          }
+        }
+        frontDetails = details;
+        logStage('front-parse');
+        _frontOcrFuture = null;
+      }
       final combinedDetails = OCRService.combineDetails(
         frontDetails ?? {},
         backDetails,
       );
 
+      if (mounted) {
+        setState(() {
+          scanMessage = 'Preparing review...';
+        });
+      }
+      debugPrint(
+        'OCR timing: review-ready totalMs=${scanStopwatch.elapsedMilliseconds}',
+      );
       await _showConfirmationScreen(combinedDetails);
+      scanSucceeded = true;
     } catch (e) {
       if (!mounted) return;
 
@@ -1753,9 +2011,16 @@ class _OCRScannerPageState extends State<OCRScannerPage>
         SnackBar(content: Text('Scanning error: $e')),
       );
     } finally {
+      await cleanupRoi();
       debugPrint(
         'OCR timing: total totalMs=${scanStopwatch.elapsedMilliseconds}',
       );
+      if (kDebugMode) {
+        debugPrint(
+          'OCR capture result: sharpness=${captureSharpness?.toStringAsFixed(2) ?? 'unknown'} '
+          'resolution=${captureWidth}x$captureHeight succeeded=$scanSucceeded',
+        );
+      }
       if (mounted) {
         setState(() {
           isProcessing = false;
@@ -1856,6 +2121,18 @@ class _OCRScannerPageState extends State<OCRScannerPage>
                           border: OutlineInputBorder(),
                         ),
                       ),
+                      if (details['quantity_status'] == 'UNCERTAIN')
+                        const Padding(
+                          padding: EdgeInsets.only(top: 4),
+                          child: Text(
+                            'Check this value before adding',
+                            style: TextStyle(
+                              color: Colors.orange,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
                       const SizedBox(height: 12),
                       TextField(
                         controller: brandController,
@@ -2022,7 +2299,6 @@ class _OCRScannerPageState extends State<OCRScannerPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     controller?.dispose();
-    textRecognizer.close();
     super.dispose();
   }
 
@@ -2212,22 +2488,38 @@ class _RecipesScreenState extends State<RecipesScreen> {
   final TextEditingController _chatController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
-  final List<Map<String, String>> _messages = [
-    {
-      'role': 'assistant',
-      'content': 'Hello! I am Chef AI 👨‍🍳\n\n'
-          'Ask me for ANY recipe you want.\n\n'
-          'For example:\n'
-          '• How can I make chicken biryani?\n'
-          '• How can I make chicken curry?\n'
-          '• Give me a dal recipe\n'
-          '• How can I make Maggi?\n'
-          '• How can I make paneer butter masala?\n\n'
-          'I will generate the recipe for the exact dish you ask for.',
-    },
-  ];
+  late final List<Map<String, String>> _normalMessages;
+  late final List<Map<String, String>> _pantryMessages;
+  RecipeMode _mode = RecipeMode.normalChat;
 
   bool isTyping = false;
+
+  List<Map<String, String>> get _messages =>
+      _mode == RecipeMode.normalChat ? _normalMessages : _pantryMessages;
+
+  @override
+  void initState() {
+    super.initState();
+    _normalMessages = [_welcomeMessage('Normal Chat')];
+    _pantryMessages = [
+      {
+        'role': 'assistant',
+        'content': 'Pantry Cooking mode is ready.\n\n'
+            'I will prioritize suitable products expiring within 7 days, '
+            'exclude expired or finished products, and show missing ingredients.',
+      },
+    ];
+  }
+
+  Map<String, String> _welcomeMessage(String mode) {
+    return {
+      'role': 'assistant',
+      'content': 'Hello! I am Chef AI 👨‍🍳\n\n'
+          '$mode lets you request an exact dish.\n\n'
+          'Try Maggi, chicken curry, fried rice, dal, or pasta. '
+          'Only recipe-relevant pantry products will be shown.',
+    };
+  }
 
   @override
   void dispose() {
@@ -2267,11 +2559,10 @@ class _RecipesScreenState extends State<RecipesScreen> {
     _scrollToBottom();
 
     try {
-      final response = await RecipeService.generateRecipe(
+      final response = await RecipeService.generateRecipeForProducts(
         userMessage,
-        pantryItems: widget.pantryItems
-            .map((item) => '${item.name} (${item.quantity})')
-            .toList(),
+        pantry: widget.pantryItems,
+        conversationContext: _conversationContext,
       );
 
       if (!mounted) return;
@@ -2283,14 +2574,66 @@ class _RecipesScreenState extends State<RecipesScreen> {
         });
         isTyping = false;
       });
+    } on RecipeAgentException catch (error) {
+      if (!mounted) return;
+
+      final detail = error.message;
+      final isIncompleteRecipe = detail == 'each ingredient needs a name' ||
+        detail == 'required_ingredients must contain 1-50 items' ||
+        detail == 'dish_name is required';
+      final isGeminiUpstreamError =
+        detail.startsWith('Gemini API request failed') ||
+        detail.startsWith('Gemini network request failed');
+
+      setState(() {
+        _messages.add({
+        'role': 'assistant',
+        'content': isIncompleteRecipe
+            ? '❌ The recipe response was incomplete.\n\n'
+                'Please try the recipe request again.\n\n'
+                'Error: $detail'
+            : isGeminiUpstreamError
+                ? '❌ Gemini could not generate the recipe right now.\n\n'
+                    'Please try again later.\n\n'
+                    'Error: $detail'
+                : '❌ The Recipe Agent returned an error.\n\n'
+                    'Please try again.\n\n'
+                    'Error: $detail',
+        });
+        isTyping = false;
+      });
+    } on TimeoutException catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _messages.add({
+          'role': 'assistant',
+          'content': '❌ Recipe generation timed out.\n\n'
+              'Please try again.\n\n'
+              'Error: $error',
+        });
+        isTyping = false;
+      });
+    } on SocketException catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _messages.add({
+          'role': 'assistant',
+          'content': '❌ The Recipe Agent is unreachable.\n\n'
+              'Check that the backend is running and try again.\n\n'
+              'Error: $error',
+        });
+        isTyping = false;
+      });
     } catch (e) {
       if (!mounted) return;
 
       setState(() {
         _messages.add({
           'role': 'assistant',
-          'content': '❌ Sorry, I could not generate the recipe.\n\n'
-              'Please check your Gemini API connection and try again.\n\n'
+          'content': '❌ The Recipe Agent could not generate the recipe.\n\n'
+              'Please try again.\n\n'
               'Error: $e',
         });
         isTyping = false;
@@ -2300,21 +2643,57 @@ class _RecipesScreenState extends State<RecipesScreen> {
     _scrollToBottom();
   }
 
+  String get _conversationContext {
+    final previous =
+        _messages.where((message) => message['role'] == 'assistant').toList();
+    if (previous.isEmpty) return '';
+    return 'Continue the ${_mode == RecipeMode.normalChat ? 'Normal Chat' : 'Pantry Cooking'} '
+        'conversation. Previous response: ${previous.last['content']}';
+  }
+
+  Future<void> _suggestFromPantry() async {
+    if (isTyping) return;
+    setState(() {
+      isTyping = true;
+      _messages.add({
+        'role': 'user',
+        'content': 'Suggest a recipe using products nearing expiry.',
+      });
+    });
+    _scrollToBottom();
+
+    final response = await RecipeService.generatePantryCooking(
+      pantry: widget.pantryItems,
+      userRequest: 'Suggest a recipe using products nearing expiry.',
+    );
+    if (!mounted) return;
+    setState(() {
+      _messages.add({'role': 'assistant', 'content': response});
+      isTyping = false;
+    });
+    _scrollToBottom();
+  }
+
+  void _switchMode(RecipeMode mode) {
+    if (isTyping || mode == _mode) return;
+    setState(() => _mode = mode);
+    _scrollToBottom();
+  }
+
   void _clearChat() {
     setState(() {
-      _messages.clear();
-      _messages.add({
-        'role': 'assistant',
-        'content': 'Hello! I am Chef AI 👨‍🍳\n\n'
-            'Ask me for ANY recipe you want.\n\n'
-            'For example:\n'
-            '• Chicken Biryani\n'
-            '• Chicken Curry\n'
-            '• Dal\n'
-            '• Maggi\n'
-            '• Paneer Butter Masala\n\n'
-            'I will generate the recipe for the exact dish you ask for.',
-      });
+      _messages
+        ..clear()
+        ..add(
+          _mode == RecipeMode.normalChat
+              ? _welcomeMessage('Normal Chat')
+              : {
+                  'role': 'assistant',
+                  'content': 'Pantry Cooking mode is ready.\n\n'
+                      'Ask for a recipe using your pantry or use the '
+                      'expiry suggestion button below.',
+                },
+        );
     });
     _scrollToBottom();
   }
@@ -2342,6 +2721,37 @@ class _RecipesScreenState extends State<RecipesScreen> {
       ),
       body: Column(
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: SegmentedButton<RecipeMode>(
+              segments: const [
+                ButtonSegment(
+                  value: RecipeMode.normalChat,
+                  icon: Icon(Icons.chat_bubble_outline),
+                  label: Text('Normal Chat'),
+                ),
+                ButtonSegment(
+                  value: RecipeMode.pantryCooking,
+                  icon: Icon(Icons.kitchen_outlined),
+                  label: Text('Pantry Cooking'),
+                ),
+              ],
+              selected: {_mode},
+              onSelectionChanged: (selection) => _switchMode(selection.first),
+            ),
+          ),
+          if (_mode == RecipeMode.pantryCooking)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: isTyping ? null : _suggestFromPantry,
+                  icon: const Icon(Icons.warning_amber_outlined),
+                  label: const Text('Suggest using products expiring soon'),
+                ),
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               controller: _scrollController,

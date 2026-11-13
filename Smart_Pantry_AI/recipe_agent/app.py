@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from .agent import AgentError, RecipeAgent
 from .models import validate_request_body
-from .providers import ProviderFailure
+from .vision import MAX_IMAGE_BYTES, ProductIdentifier, VisionError
 
 _recipe_agent_dir = Path(__file__).parent
 _project_env = _recipe_agent_dir.parent / ".env"
@@ -24,9 +24,13 @@ logging.basicConfig(
 )
 
 
-def create_app(agent: object | None = None) -> Flask:
+def create_app(
+    agent: object | None = None,
+    identifier: ProductIdentifier | None = None,
+) -> Flask:
     app = Flask(__name__)
     recipe_manager = agent or RecipeAgent()
+    product_identifier = identifier or ProductIdentifier()
     active_request_ids: set[str] = set()
     request_ids_lock = threading.Lock()
 
@@ -102,7 +106,7 @@ def create_app(agent: object | None = None) -> Flask:
     def chat():
         try:
             return run_agent(False)
-        except (ProviderFailure, AgentError) as error:
+        except AgentError as error:
             return jsonify(
                 {
                     "status": "error",
@@ -113,11 +117,32 @@ def create_app(agent: object | None = None) -> Flask:
         except ValueError as error:
             return jsonify({"status": "error", "message": str(error)}), 400
 
+    @app.post("/identify-product")
+    def identify_product():
+        upload = request.files.get("image")
+        if upload is None:
+            return jsonify({"status": "error", "message": "Provide an 'image' file."}), 400
+        image = upload.read(MAX_IMAGE_BYTES + 1)
+        if not image:
+            return jsonify({"status": "error", "message": "The image is empty."}), 400
+        if len(image) > MAX_IMAGE_BYTES:
+            return jsonify({"status": "error", "message": "The image must be 5 MB or smaller."}), 413
+        mime_type = upload.mimetype if (upload.mimetype or "").startswith("image/") else "image/jpeg"
+        try:
+            result = product_identifier.identify(image, mime_type)
+        except VisionError as error:
+            logging.getLogger(__name__).warning("%s", error)
+            return jsonify({
+                "status": "error",
+                "message": "Product identification is temporarily unavailable.",
+            }), 503
+        return jsonify({"status": "ok", **result})
+
     @app.post("/pantry-cook")
     def pantry_cook():
         try:
             return run_agent(True)
-        except (ProviderFailure, AgentError) as error:
+        except AgentError as error:
             return jsonify(
                 {
                     "status": "error",

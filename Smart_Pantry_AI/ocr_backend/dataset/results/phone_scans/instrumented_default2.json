@@ -1,0 +1,100 @@
+{
+  "mode": "custom",
+  "images": [
+    {
+      "file": "f13cff27cf1048fc8a35c5549b6a895d_input.jpg",
+      "status": "http_error",
+      "http_status": 500,
+      "dimensions": [
+        520,
+        436
+      ],
+      "sha256": "cc660cb25eb3016e8ad9112de13d2bd90ed9f66a32478d10b7ee3e307eee4c2b",
+      "elapsed_ms": 25390.76,
+      "processing_ms": null,
+      "text": "",
+      "detections": [],
+      "lines": [],
+      "error_code": null
+    },
+    {
+      "file": "54aea8ada2b24e7f8ca8062f09449489_input.jpg",
+      "status": "http_error",
+      "http_status": 500,
+      "dimensions": [
+        720,
+        1280
+      ],
+      "sha256": "095ae5cc84154be7a424ceb7c2ab984f131801a14ea78274d77fc742ccfe2aaa",
+      "elapsed_ms": 30289.99,
+      "processing_ms": null,
+      "text": "",
+      "detections": [],
+      "lines": [],
+      "error_code": null
+    },
+    {
+      "file": "5ed14a6d29de4494bfa9c20c287f38f3_input.jpg",
+      "status": "http_error",
+      "http_status": 500,
+      "dimensions": [
+        720,
+        1280
+      ],
+      "sha256": "095ae5cc84154be7a424ceb7c2ab984f131801a14ea78274d77fc742ccfe2aaa",
+      "elapsed_ms": 25931.14,
+      "processing_ms": null,
+      "text": "",
+      "detections": [],
+      "lines": [],
+      "error_code": null
+    }
+  ],
+  "recognizer_mode": "pretrained",
+  "date_retry_mode": "custom_lightweight",
+  "fixed_images": [
+    "f13cff27cf1048fc8a35c5549b6a895d_input.jpg",
+    "54aea8ada2b24e7f8ca8062f09449489_input.jpg",
+    "5ed14a6d29de4494bfa9c20c287f38f3_input.jpg"
+  ],
+  "ground_truth": {
+    "mfd": "15/07/2024",
+    "exp": "14/01/2025",
+    "quantity": "5 kg",
+    "price": "285.00"
+  },
+  "distinct_image_count": 2,
+  "distinct_hashes": [
+    "095ae5cc84154be7a424ceb7c2ab984f131801a14ea78274d77fc742ccfe2aaa",
+    "cc660cb25eb3016e8ad9112de13d2bd90ed9f66a32478d10b7ee3e307eee4c2b"
+  ],
+  "metrics": {
+    "image_count": 0,
+    "fields": {
+      "mfd": {
+        "exact": 0,
+        "total": 0,
+        "exact_accuracy": 0.0,
+        "digit_accuracy": 0.0
+      },
+      "exp": {
+        "exact": 0,
+        "total": 0,
+        "exact_accuracy": 0.0,
+        "digit_accuracy": 0.0
+      },
+      "quantity": {
+        "exact": 0,
+        "total": 0,
+        "exact_accuracy": 0.0,
+        "digit_accuracy": 0.0
+      },
+      "price": {
+        "exact": 0,
+        "total": 0,
+        "exact_accuracy": 0.0,
+        "digit_accuracy": 0.0
+      }
+    }
+  }
+}

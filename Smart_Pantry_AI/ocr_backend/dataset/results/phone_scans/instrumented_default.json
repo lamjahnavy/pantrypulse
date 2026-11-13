@@ -1,0 +1,38 @@
+{
+  "mode": "custom",
+  "images": [
+    {
+      "file": "f13cff27cf1048fc8a35c5549b6a895d_input.jpg",
+      "status": "http_error",
+      "http_status": 500,
+      "dimensions": [
+        520,
+        436
+      ],
+      "sha256": "cc660cb25eb3016e8ad9112de13d2bd90ed9f66a32478d10b7ee3e307eee4c2b",
+      "elapsed_ms": 1492768.68,
+      "processing_ms": null,
+      "text": "",
+      "detections": [],
+      "lines": [],
+      "error_code": null
+    }
+  ],
+  "recognizer_mode": "pretrained",
+  "date_retry_mode": "custom_lightweight",
+  "fixed_images": [
+    "f13cff27cf1048fc8a35c5549b6a895d_input.jpg",
+    "54aea8ada2b24e7f8ca8062f09449489_input.jpg",
+    "5ed14a6d29de4494bfa9c20c287f38f3_input.jpg"
+  ],
+  "ground_truth": {
+    "mfd": "15/07/2024",
+    "exp": "14/01/2025",
+    "quantity": "5 kg",
+    "price": "285.00"
+  },
+  "distinct_image_count": 1,
+  "distinct_hashes": [
+    "cc660cb25eb3016e8ad9112de13d2bd90ed9f66a32478d10b7ee3e307eee4c2b"
+  ]
+}

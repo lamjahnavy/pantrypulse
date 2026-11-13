@@ -474,3 +474,47 @@ def test_app_token_protects_chat_but_not_health(monkeypatch):
     assert client.post(
         "/chat", json=body, headers={"X-Request-ID": "c", "X-App-Token": "secret"}
     ).status_code == 200
+
+
+def test_identify_product_reads_brand_and_name_from_gemini_vision():
+    from io import BytesIO
+
+    from recipe_agent.vision import ProductIdentifier
+
+    calls = []
+
+    def requester(url, **kwargs):
+        calls.append(url)
+
+        class FakeResponse:
+            status_code = 503 if len(calls) == 1 else 200
+
+            def json(self):
+                return {"candidates": [{"content": {"parts": [{"text": json.dumps({
+                    "brand": "Britannia",
+                    "product_name": "Marie Gold",
+                    "category": "snacks",
+                })}]}}]}
+
+        return FakeResponse()
+
+    class StubAgent:
+        provider_models = []
+
+    identifier = ProductIdentifier(api_key="test-key", requester=requester)
+    client = create_app(StubAgent(), identifier).test_client()
+    response = client.post(
+        "/identify-product",
+        data={"image": (BytesIO(b"\xff\xd8fake-jpeg"), "front.jpg", "image/jpeg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "status": "ok",
+        "brand": "Britannia",
+        "product_name": "Marie Gold",
+        "category": "Snacks",
+    }
+    # The overloaded first model hands over to the next one.
+    assert len(calls) == 2
+    assert client.post("/identify-product").status_code == 400

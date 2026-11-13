@@ -1,8 +1,42 @@
 # Pantry Pulse Keras-OCR Backend
 
-This is the Phase 1 OCR backend skeleton. It exposes a small HTTP API around
-the pretrained Keras-OCR pipeline. It is not trained or customized for Indian
-FMCG packaging yet.
+This is the Keras-OCR backend for product scanning. Flutter sends both front
+and back product captures to this API; there is no on-device ML Kit OCR path.
+The backend uses the pretrained Keras-OCR pipeline. It is not trained or
+customized for Indian FMCG packaging.
+
+The pretrained and exported custom date recognizers are loaded once at backend
+startup. Normal scans use the pretrained recognizer. By default,
+`OCR_DATE_RETRY_MODE=custom_lightweight` reuses the normal detector boxes,
+selects at most 15 date-like candidates, and recognizes each candidate with the
+custom recognizer using the original crop and at most one upscale. Set
+`OCR_DATE_RETRY_MODE=pretrained_fallback` to retain the older pretrained-only
+date retry path. `OCR_RECOGNIZER_MODE` remains `pretrained` by default and
+controls the health/status mode and legacy fallback behavior.
+
+For evidence collection, set `OCR_DEBUG=1` and `OCR_DEBUG_DIR` to a writable
+directory. The date retry then saves each selected crop and its upscaled
+variant, and the response includes candidate bounds, crop sizes, variant text,
+scores, and clipping flags. Debug logging is disabled by default.
+
+The following opt-in settings are used for controlled crop experiments:
+
+- `OCR_DATE_CROP_PADDING`: fractional padding around each candidate, for
+  example `0.15`; default `0`.
+- `OCR_DATE_UPSCALE_MODE`: `cubic` or `lanczos`; default `cubic`.
+- `OCR_DATE_UPSCALE_SCALE`: maximum upscale factor; default `2`.
+- `OCR_DATE_CANDIDATE_LIMIT`: number of date-retry crops, capped at 15; default `8`.
+- `OCR_DATE_VARIANT_LIMIT`: `1`, `2`, or `3`; default `2`. A second variant is skipped when the first returns a valid calendar date.
+- `OCR_DETECTOR_LONG_SIDE`: detector working-copy long side, clamped to
+  `640`-`2400`; default `1600`.
+- `OCR_SERIALIZE_REQUESTS`: set to `1` to serialize OCR inference requests.
+  It defaults to `0`; CPU overlap testing showed no end-to-end benefit from
+  serialization.
+
+The resumable phone evaluator writes parser output, SHA-256 hashes, distinct
+image counts, exact-match metrics, and digit-level metrics into its JSON
+output. Identical files are processed once. Keep fixed development photos
+separate from new-pack test photos; do not tune settings on the test set.
 
 ## Requirements
 
@@ -10,8 +44,8 @@ FMCG packaging yet.
 - A network connection the first time Keras-OCR downloads pretrained weights
 
 Python 3.12 is used because it is installed in the project environment and has
-compatible TensorFlow wheels. The backend is intentionally separate from the
-Flutter application; Flutter is not connected to it in Phase 1.
+compatible TensorFlow wheels. The backend runs as a separate HTTP process that
+the Flutter scanner connects to.
 
 ## Install
 
@@ -30,6 +64,13 @@ python -m pip install -r ocr_backend\requirements.txt
 With `Smart_Pantry_AI` as the current directory and the virtual environment activated:
 
 ```powershell
+python -m ocr_backend.app
+```
+
+To select the explicit pretrained-only fallback before starting Flask:
+
+```powershell
+$env:OCR_DATE_RETRY_MODE = "pretrained_fallback"
 python -m ocr_backend.app
 ```
 
@@ -92,23 +133,57 @@ curl.exe -X POST http://10.180.142.87:8000/ocr `
   -F "image=@C:\path\to\back-roi.jpg"
 ```
 
-Date mode locates nearby date-label detections when available, then runs three
-targeted image variants: upscaled color, upscaled contrast/sharpened grayscale,
-and adaptive-threshold grayscale. It is used by Flutter only when normal back
-OCR leaves MFD or expiry undetected.
+Date mode reuses the normal pass detections and does not run the detector again.
+It selects at most 15 boxes near date labels, date-like digit text, or the lower
+label area. Each selected crop is recognized in its original form and, when
+small, once after upscaling.
+
+For opt-in diagnostics, set `OCR_DEBUG=true` to log ordered detections and
+grouped reading-order lines. To additionally save the decoded input and date
+variants, set `OCR_DEBUG_DIR` to an explicitly chosen local directory. These
+options are disabled by default because OCR text and package images may be
+sensitive.
 
 Example response shape:
 
 ```json
 {
   "engine": "keras_ocr",
+  "status": "ok",
   "text": "AMUL MILK",
   "detections": [
     {
       "text": "AMUL",
       "box": [[12.0, 20.0], [80.0, 20.0], [80.0, 45.0], [12.0, 45.0]]
     }
-  ]
+  ],
+  "lines": [
+    {
+      "text": "AMUL",
+      "detections": [
+        {
+          "text": "AMUL",
+          "box": [[12.0, 20.0], [80.0, 20.0], [80.0, 45.0], [12.0, 45.0]]
+        }
+      ]
+    }
+  ],
+  "processing_ms": 123.4,
+  "error_code": null
+}
+```
+
+When Keras-OCR finds no usable text, the response is successful but explicit:
+
+```json
+{
+  "engine": "keras_ocr",
+  "status": "empty",
+  "text": "",
+  "detections": [],
+  "lines": [],
+  "processing_ms": 123.4,
+  "error_code": "EMPTY_OCR"
 }
 ```
 
@@ -123,11 +198,17 @@ in this phase.
 - `415`: non-image content type
 - `502`: Keras-OCR inference failure
 
-## Phase 1 limitation
+The Flutter scanner treats network failures, timeouts, malformed responses and
+empty OCR results as retryable conditions while preserving the existing
+front/back capture and review/edit flow.
 
-The backend uses the pretrained Keras-OCR model only. No Indian FMCG dataset,
-fine-tuning, domain vocabulary, preprocessing experiments, evaluation results,
-or Flutter integration are included yet.
+## Lightweight date retry limitation
+
+The custom recognizer does not replace normal product OCR and its saved
+74.3976% result is recognition-only accuracy on held-out ground-truth crops.
+It is not a phone or full-image end-to-end accuracy claim. The lightweight
+retry annotates generated detections with `recognizer: "custom_date"` while
+normal detections are annotated `recognizer: "pretrained"`.
 
 ## Phase 2 evaluation
 
@@ -146,3 +227,35 @@ The evaluator saves raw detections and summary metrics to
 `dataset/results/keras_ocr_preprocessing_results.json`. It resizes only the
 in-memory evaluation copies to bounded dimensions to keep CPU evaluation
 tractable; original image files remain unchanged.
+
+### External dataset baseline evaluation
+
+The standalone external evaluator reads the original annotation files from
+`Smart_Pantry_Datasets/Date-Real` and
+`Smart_Pantry_Datasets/Products-Real/evaluation`. It uses the same pretrained
+`KerasOcrEngine` as the Flask API, does not modify the source datasets, and
+does not train or fine-tune a model:
+
+```powershell
+Push-Location Smart_Pantry_AI
+$env:PYTHONPATH = $PWD
+python ocr_backend\evaluate_external_datasets.py
+Pop-Location
+```
+
+Results are written only to:
+
+```text
+ocr_backend/dataset/results/external/
+├── predictions.jsonl
+├── summary.json
+└── report.md
+```
+
+Detections are matched one-to-one using IoU >= 0.5. Unmatched ground-truth
+regions count as false negatives, unmatched predictions count as false
+positives, and recognition normalization trims/collapses whitespace only.
+Raw OCR text and polygons remain in `predictions.jsonl`. The evaluation
+includes Date-Real day/month/year and Products-Real evaluation `exp` and
+generic `date`; it does not claim MFD, product-name, quantity, or price
+accuracy where the datasets provide no such ground truth.

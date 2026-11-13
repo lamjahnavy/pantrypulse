@@ -1,0 +1,13 @@
+{
+  "format": "keras_ocr_recognizer_weights_only",
+  "source_checkpoint": "D:\\Semester-07\\CapStone\\Smart_Pantry_AI\\Smart_Pantry_AI\\ocr_backend\\dataset\\training_runs\\custom_recognizer_pilot_retry\\checkpoint_03.weights.h5",
+  "selected_epoch": 3,
+  "selected_validation_loss": 1.8946152925491333,
+  "alphabet": " -./0123456789ABCDEFGJLMNOPRSTUVY",
+  "output_width": 34,
+  "output_timesteps": 48,
+  "pretrained_backbone_reused": true,
+  "pretrained_classification_head_reused": false,
+  "spatial_transformer_enabled": true,
+  "load_instruction": "Rebuild Recognizer(alphabet=metadata alphabet, weights='kurapan') and load recognizer.weights.h5 into recognizer.model."
+}

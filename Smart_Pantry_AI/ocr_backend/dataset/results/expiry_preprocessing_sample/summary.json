@@ -1,0 +1,60 @@
+{
+  "engine": "keras_ocr",
+  "model_status": "pretrained baseline; no training or fine-tuning",
+  "dataset": "Products-Real/evaluation",
+  "records_requested": 50,
+  "records_with_failures": 0,
+  "normalization": "trim and collapse whitespace only",
+  "variants": {
+    "original_crop": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.5642142857142857
+    },
+    "upscaled_crop": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.7334999999999999
+    },
+    "grayscale_contrast": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.6395000000000001
+    },
+    "adaptive_threshold": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.684
+    },
+    "upscaled_contrast": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.7500714285714285
+    },
+    "upscaled_adaptive": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.8457142857142856
+    },
+    "upscaled_sharpened_contrast": {
+      "records_processed": 50,
+      "correct_predictions": 0,
+      "failed_predictions": 50,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.7435714285714287
+    }
+  },
+  "failures": []
+}

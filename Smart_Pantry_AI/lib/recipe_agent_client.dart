@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 
 import 'product_model.dart';
 
@@ -90,6 +93,68 @@ class RecipeAgentClient {
         stackTrace: stackTrace,
       );
       rethrow;
+    }
+  }
+
+  /// Vision fallback for the front of a pack: returns brand, product_name and
+  /// category, or null when the service is unavailable (OCR result is kept).
+  static Future<Map<String, String>?> identifyProduct(
+    Uint8List imageBytes,
+  ) async {
+    try {
+      // Phone photos are several MB; ~1024px JPEG keeps the upload fast.
+      final jpeg = await Isolate.run(() {
+        final decoded = img.decodeImage(imageBytes);
+        if (decoded == null) return null;
+        final oriented = img.bakeOrientation(decoded);
+        final resized = oriented.width >= oriented.height
+            ? (oriented.width > 1024
+                ? img.copyResize(oriented, width: 1024)
+                : oriented)
+            : (oriented.height > 1024
+                ? img.copyResize(oriented, height: 1024)
+                : oriented);
+        return Uint8List.fromList(img.encodeJpg(resized, quality: 80));
+      });
+      if (jpeg == null) return null;
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$baseUrl/identify-product'),
+      )
+        ..headers.addAll({
+          if (_appToken.isNotEmpty) 'X-App-Token': _appToken,
+        })
+        // No content type: the backend treats an untyped upload as JPEG.
+        ..files.add(http.MultipartFile.fromBytes(
+          'image',
+          jpeg,
+          filename: 'front.jpg',
+        ));
+      final response = await http.Response.fromStream(
+        await request.send().timeout(const Duration(seconds: 60)),
+      );
+      if (response.statusCode != 200) {
+        developer.log(
+          'Product identification failed: HTTP ${response.statusCode}',
+          name: 'RecipeAgentClient',
+        );
+        return null;
+      }
+      final body = jsonDecode(response.body);
+      if (body is! Map) return null;
+      return {
+        'brand': body['brand']?.toString() ?? '',
+        'product_name': body['product_name']?.toString() ?? '',
+        'category': body['category']?.toString() ?? '',
+      };
+    } catch (error, stackTrace) {
+      developer.log(
+        'Product identification failed: ${error.runtimeType}: $error',
+        name: 'RecipeAgentClient',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return null;
     }
   }
 

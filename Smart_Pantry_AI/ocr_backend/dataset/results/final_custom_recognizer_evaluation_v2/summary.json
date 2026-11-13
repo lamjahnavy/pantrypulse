@@ -1,0 +1,68 @@
+{
+  "evaluation_type": "recognition_only_ground_truth_crops",
+  "dataset": "Products-Real/evaluation",
+  "model": "D:\\Semester-07\\CapStone\\Smart_Pantry_AI\\Smart_Pantry_AI\\ocr_backend\\dataset\\training_runs\\custom_recognizer_export\\recognizer.weights.h5",
+  "custom_alphabet": " -./0123456789ABCDEFGJLMNOPRSTUVY",
+  "model_output_width": 34,
+  "expected_output_width": 34,
+  "normalization": "trim and collapse whitespace only",
+  "matching": "ground-truth bbox crop; no detector matching",
+  "total_valid_records": 664,
+  "total_annotation_records": 665,
+  "skipped_records": [],
+  "inference_failures": [
+    {
+      "image": "test_00545.jpg",
+      "error": "ValueError: bbox [1214, 1749, 1358, 1780] is outside decoded image 2016x1512"
+    }
+  ],
+  "duration_seconds": 935.3314480999834,
+  "metrics": {
+    "trained_custom_recognizer": {
+      "valid_records": 664,
+      "exact_normalized_text_accuracy": 0.7439759036144579,
+      "mean_cer": 0.05523995331977264,
+      "mean_wer": 0.28564257028112444,
+      "exact_matches": 494,
+      "failures": 1
+    },
+    "pretrained_recognizer_same_crops": {
+      "valid_records": 664,
+      "exact_normalized_text_accuracy": 0.0,
+      "mean_cer": 0.6024927089309605,
+      "mean_wer": 1.0,
+      "exact_matches": 0,
+      "failures": 2
+    }
+  },
+  "component_accuracy": {
+    "trained_custom_recognizer": {
+      "day": {
+        "records": 630,
+        "exact_accuracy": 0.9174603174603174
+      },
+      "month": {
+        "records": 664,
+        "exact_accuracy": 0.875
+      },
+      "year": {
+        "records": 655,
+        "exact_accuracy": 0.9145038167938931
+      }
+    },
+    "pretrained_recognizer_same_crops": {
+      "day": {
+        "records": 630,
+        "exact_accuracy": 0.4888888888888889
+      },
+      "month": {
+        "records": 664,
+        "exact_accuracy": 0.4683734939759036
+      },
+      "year": {
+        "records": 655,
+        "exact_accuracy": 0.4763358778625954
+      }
+    }
+  }
+}

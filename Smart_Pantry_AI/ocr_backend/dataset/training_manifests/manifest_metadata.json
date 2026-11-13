@@ -1,0 +1,39 @@
+{
+  "seed": 20261029,
+  "train_fraction": 0.8,
+  "scope": [
+    "Date-Real",
+    "Products-Real/train"
+  ],
+  "evaluation_data_used": false,
+  "raw_labels_preserved": true,
+  "label_transform": "none",
+  "pretrained_alphabet": "0123456789abcdefghijklmnopqrstuvwxyz",
+  "custom_alphabet": " -./0123456789ABCDEFGJLMNOPRSTUVY",
+  "custom_alphabet_compatibility": "pretrained recognizer backbone can be reused; pretrained recognition classification head is incompatible and must be newly initialized for a future custom-alphabet training run",
+  "counts": {
+    "all_annotation_records": 4272,
+    "default_alphabet_recognizer": 1462,
+    "custom_alphabet_recognizer": 2736,
+    "detector": 4272,
+    "excluded": 1274
+  },
+  "sources": [
+    {
+      "source": "Date-Real",
+      "annotation_records": 510,
+      "image_split_counts": {
+        "train": 408,
+        "validation": 102
+      }
+    },
+    {
+      "source": "Products-Real/train",
+      "annotation_records": 1102,
+      "image_split_counts": {
+        "train": 881,
+        "validation": 221
+      }
+    }
+  ]
+}
