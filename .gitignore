@@ -18,3 +18,6 @@ Smart_Pantry_AI/ocr_backend/*.log
 # Training checkpoints; the exported weights the app loads are still committed.
 Smart_Pantry_AI/ocr_backend/dataset/training_runs/*
 !Smart_Pantry_AI/ocr_backend/dataset/training_runs/custom_recognizer_export/
+
+# Android Studio settings
+.idea/
